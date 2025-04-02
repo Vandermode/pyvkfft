@@ -30,16 +30,213 @@ from .base import load_library, VkFFTApp as VkFFTAppBase, check_vkfft_result, ct
 
 try:
     _vkfft_cuda = load_library("_vkfft_cuda")
+    
+    
+    def vkfft_max_fft_dimensions():
+        """
+        Get the maximum number of dimensions VkFFT can handle. This is
+        set at compile time. VkFFT default is 4, pyvkfft sets this to 8.
+        Note that consecutive non-transformed are collapsed into a single
+        axis, reducing the effective number of dimensions.
+
+        :return: VKFFT_MAX_FFT_DIMENSIONS
+        """
+        return _vkfft_cuda.vkfft_max_fft_dimensions()
+    
+    
+    # Define constants from VkFFT
+    VKFFT_MAX_FFT_DIMENSIONS = vkfft_max_fft_dimensions()
+
+    # Basic type definitions matching VkFFT types
+    pfINT = ctypes.c_int64
+    pfUINT = ctypes.c_uint64
+    pfLD = ctypes.c_longdouble  # long double equivalent
+
+
+    class VkFFTConfiguration(ctypes.Structure):
+        """Python ctypes representation of VkFFTConfiguration structure for CUDA backend."""
+        _fields_ = [
+            # Required parameters
+            ("FFTdim", pfUINT),  # FFT dimensionality (1, 2 or 3)
+            ("size", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # WHD -system dimensions
+            ("device", ctypes.POINTER(ctypes.c_void_p)),  # pointer to CUDA device
+            ("stream", ctypes.POINTER(ctypes.c_void_p)),  # pointer to CUDA streams
+            ("num_streams", pfUINT),  # number of streams for asynchronous execution
+            
+            # Data parameters
+            ("userTempBuffer", pfUINT),  # manual user allocation
+            ("bufferNum", pfUINT),  # number of buffers passed
+            ("tempBufferNum", pfUINT),  # number of temp buffers passed
+            ("inputBufferNum", pfUINT),  # number of input buffers passed
+            ("outputBufferNum", pfUINT),  # number of output buffers passed
+            ("kernelNum", pfUINT),  # number of kernel buffers passed
+            
+            # Buffer size arrays
+            ("bufferSize", ctypes.POINTER(pfUINT)),  # buffer sizes in bytes
+            ("tempBufferSize", ctypes.POINTER(pfUINT)),  # temp buffer sizes
+            ("inputBufferSize", ctypes.POINTER(pfUINT)),  # input buffer sizes
+            ("outputBufferSize", ctypes.POINTER(pfUINT)),  # output buffer sizes
+            ("kernelSize", ctypes.POINTER(pfUINT)),  # kernel buffer sizes
+            
+            # Buffer pointers
+            ("buffer", ctypes.POINTER(ctypes.c_void_p)),  # computation buffers
+            ("tempBuffer", ctypes.POINTER(ctypes.c_void_p)),  # temp buffers
+            ("inputBuffer", ctypes.POINTER(ctypes.c_void_p)),  # input buffers
+            ("outputBuffer", ctypes.POINTER(ctypes.c_void_p)),  # output buffers
+            ("kernel", ctypes.POINTER(ctypes.c_void_p)),  # kernel buffers
+            
+            # Offset specifications
+            ("specifyOffsetsAtLaunch", pfUINT),  # specify offsets at launch
+            ("bufferOffset", pfUINT),  # buffer offset
+            ("tempBufferOffset", pfUINT),  # temp buffer offset
+            ("inputBufferOffset", pfUINT),  # input buffer offset
+            ("outputBufferOffset", pfUINT),  # output buffer offset
+            ("kernelOffset", pfUINT),  # kernel offset
+            
+            # Complex component handling
+            ("bufferSeparateComplexComponents", pfUINT),  # manage buffer complex numbers as separate R and I
+            ("tempBufferSeparateComplexComponents", pfUINT),  # manage temp buffer complex numbers as separate R and I
+            ("inputBufferSeparateComplexComponents", pfUINT),  # manage input buffer complex numbers as separate R and I
+            ("outputBufferSeparateComplexComponents", pfUINT),  # manage output buffer complex numbers as separate R and I
+            ("kernelSeparateComplexComponents", pfUINT),  # manage kernel complex numbers as separate R and I
+            
+            # Imaginary buffer offsets
+            ("bufferOffsetImaginary", pfUINT),  # imaginary buffer offset
+            ("tempBufferOffsetImaginary", pfUINT),  # imaginary temp buffer offset
+            ("inputBufferOffsetImaginary", pfUINT),  # imaginary input buffer offset
+            ("outputBufferOffsetImaginary", pfUINT),  # imaginary output buffer offset
+            ("kernelOffsetImaginary", pfUINT),  # imaginary kernel offset
+            
+            # Performance parameters
+            ("coalescedMemory", pfUINT),  # coalesced memory in bytes
+            ("aimThreads", pfUINT),  # target threads per block
+            ("numSharedBanks", pfUINT),  # number of shared memory banks
+            ("inverseReturnToInputBuffer", pfUINT),  # return inverse transform to input buffer
+            ("numberBatches", pfUINT),  # number of batches
+            ("useUint64", pfUINT),  # use 64-bit addressing
+            ("omitDimension", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # disable FFT for specific dimensions
+            ("performBandwidthBoost", ctypes.c_int),  # reduce coalesced number for strided axes
+            ("groupedBatch", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # FFTs per threadblock per dimension
+            ("optimizePow2StridesTempBuffer", ctypes.c_int),  # optimize power of 2 strides
+            ("inStridePadTempBuffer", pfUINT),  # pad elements for optimized strides
+            ("outStridePadTempBuffer", pfUINT),  # pad elements to for optimized strides
+            
+            # Precision parameters
+            ("doublePrecision", pfUINT),  # double precision calculations
+            ("quadDoubleDoublePrecision", pfUINT),  # double-double quad precision calculations
+            ("quadDoubleDoublePrecisionDoubleMemory", pfUINT),  # double-double quad precision with FP64 storage
+            ("halfPrecision", pfUINT),  # half precision calculations
+            ("halfPrecisionMemoryOnly", pfUINT),  # half precision for I/O only
+            ("doublePrecisionFloatMemory", pfUINT),  # FP64 calculation with FP32 storage
+            
+            # Transform parameters
+            ("performR2C", pfUINT),  # R2C/C2R decomposition
+            ("performDCT", pfUINT),  # DCT transformation
+            ("performDST", pfUINT),  # DST transformation
+            ("performR2R", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # DCT/DST per axis
+            ("disableMergeSequencesR2C", pfUINT),  # disable merging of real sequences
+            ("forceCallbackVersionRealTransforms", pfUINT),  # force callback for R2C/R2R
+            
+            # Algorithm controls
+            ("normalize", pfUINT),  # normalize inverse transform
+            ("disableReorderFourStep", pfUINT),  # disable Four step algorithm unshuffling
+            ("useLUT", pfINT),  # use lookup tables
+            ("useLUT_4step", pfINT),  # use lookup tables for Four-step FFT
+            ("makeForwardPlanOnly", pfUINT),  # forward FFT only
+            ("makeInversePlanOnly", pfUINT),  # inverse FFT only
+            
+            # Buffer layout parameters
+            ("bufferStride", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # buffer strides
+            ("isInputFormatted", pfUINT),  # input buffer formatting
+            ("isOutputFormatted", pfUINT),  # output buffer formatting
+            ("inputBufferStride", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # input buffer strides
+            ("outputBufferStride", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # output buffer strides
+            ("swapTo2Stage4Step", pfUINT),  # switch to 2 upload 4-step FFT
+            ("swapTo3Stage4Step", pfUINT),  # switch to 3 upload 4-step FFT
+            
+            # Debug and optimization parameters
+            ("considerAllAxesStrided", pfUINT),  # treat non-strided axes as strided
+            ("keepShaderCode", pfUINT),  # keep and print shader code
+            ("printMemoryLayout", pfUINT),  # print buffer order
+            ("saveApplicationToString", pfUINT),  # save compiled binaries
+            ("loadApplicationFromString", pfUINT),  # load from binaries
+            ("loadApplicationString", ctypes.c_void_p),  # binary data pointer
+            ("disableSetLocale", pfUINT),  # disable locale setting
+            
+            # Bluestein algorithm parameters
+            ("fixMaxRadixBluestein", pfUINT),  # control sequence padding in Bluestein
+            ("forceBluesteinSequenceSize", pfUINT),  # force specific sequence size
+            ("useCustomBluesteinPaddingPattern", pfUINT),  # use custom padding pattern
+            ("primeSizes", ctypes.POINTER(pfUINT)),  # non-decomposable sizes
+            ("paddedSizes", ctypes.POINTER(pfUINT)),  # padding sizes
+            
+            # Rader algorithm parameters
+            ("fixMinRaderPrimeMult", pfUINT),  # start direct multiplication
+            ("fixMaxRaderPrimeMult", pfUINT),  # end direct multiplication
+            ("fixMinRaderPrimeFFT", pfUINT),  # start FFT convolution
+            ("fixMaxRaderPrimeFFT", pfUINT),  # end FFT convolution
+            ("fixMaxRaderRadixFFT", pfUINT),  # limit Rader to specific radix
+            
+            # Zero padding parameters
+            ("performZeropadding", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # enable zero padding
+            ("fft_zeropad_left", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # left zero pad boundaries
+            ("fft_zeropad_right", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # right zero pad boundaries
+            ("frequencyZeroPadding", pfUINT),  # frequency domain padding
+            
+            # Convolution parameters
+            ("performConvolution", pfUINT),  # perform convolution
+            ("conjugateConvolution", pfUINT),  # conjugate during convolution
+            ("crossPowerSpectrumNormalization", pfUINT),  # normalize frequency multiplication
+            ("coordinateFeatures", pfUINT),  # feature vector dimension
+            ("matrixConvolution", pfUINT),  # matrix-vector convolution
+            ("symmetricKernel", pfUINT),  # symmetric convolution kernel
+            ("numberKernels", pfUINT),  # number of kernels
+            ("singleKernelMultipleBatches", pfUINT),  # one kernel for multiple batches
+            ("kernelConvolution", pfUINT),  # create kernel for convolution
+            
+            # Register parameters
+            ("registerBoost", pfUINT),  # use register file to extend shared memory
+            ("registerBoostNonPow2", pfUINT),  # register boost for non-power-of-2
+            ("registerBoost4Step", pfUINT),  # register boost for large sequences
+            
+            # Memory paging parameters
+            ("devicePageSize", pfUINT),  # GPU page size in KB
+            ("localPageSize", pfUINT),  # local page size in KB
+            
+            # Device capabilities (auto-filled but can be overridden)
+            ("computeCapabilityMajor", pfUINT),  # CUDA compute capability major
+            ("computeCapabilityMinor", pfUINT),  # CUDA compute capability minor
+            ("maxComputeWorkGroupCount", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # max work group count
+            ("maxComputeWorkGroupSize", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # max work group size
+            ("maxThreadsNum", pfUINT),  # max threads
+            ("sharedMemorySizeStatic", pfUINT),  # static shared memory size
+            ("sharedMemorySize", pfUINT),  # total shared memory size
+            ("sharedMemorySizePow2", pfUINT),  # power of 2 <= shared memory size
+            ("warpSize", pfUINT),  # threads per warp
+            ("halfThreads", pfUINT),  # Intel fix
+            ("allocateTempBuffer", pfUINT),  # auto-allocated temp buffer
+            ("reorderFourStep", pfUINT),  # unshuffle Four step algorithm
+            ("maxCodeLength", pfINT),  # max code generation buffer size
+            ("maxTempLength", pfINT),  # max temp string buffer size
+            ("autoCustomBluesteinPaddingPattern", pfUINT),  # auto padding pattern
+            ("useRaderUintLUT", pfUINT),  # use LUT for Rader g_pow
+            ("vendorID", pfUINT),  # GPU vendor ID
+            
+            # CUDA-specific fields
+            ("stream_event", ctypes.POINTER(ctypes.c_void_p)),  # stream events
+            ("streamCounter", pfUINT),  # stream counter
+            ("streamID", pfUINT),  # stream ID
+        ]
 
 
     class _types:
         """Aliases"""
-        vkfft_config = ctypes.c_void_p
+        vkfft_config = ctypes.POINTER(VkFFTConfiguration)
         stream = ctypes.c_void_p
         vkfft_app = ctypes.c_void_p
 
 
-    _vkfft_cuda.make_config.restype = ctypes.c_void_p
+    _vkfft_cuda.make_config.restype = _types.vkfft_config
     _vkfft_cuda.make_config.argtypes = [ctype_int_size_p, ctypes.c_size_t,
                                         ctypes.c_void_p, ctypes.c_void_p, _types.stream,
                                         ctypes.c_int, ctypes.c_size_t, ctypes.c_int,
@@ -235,8 +432,8 @@ class VkFFTApp(VkFFTAppBase):
         self.use_bluestein_fft = [bool(n) for n in use_bluestein_fft[:len(self.shape)]]
         self.nb_axis_upload = [int(num_axis_upload[i] * (self.skip_axis[i] is False))
                                for i in range(len(self.shape))]
-        if convolve and max(self.nb_axis_upload) > 1:
-            raise RuntimeError(f"On-the-fly convolution is not supported with axis multi-upload [{self.__str__()}]")
+        # if convolve and max(self.nb_axis_upload) > 1:
+        #     raise RuntimeError(f"On-the-fly convolution is not supported with axis multi-upload [{self.__str__()}]")
         if verbose:
             print(self)
 
@@ -296,7 +493,7 @@ class VkFFTApp(VkFFTAppBase):
         if self.inplace:
             dest_gpudata = 0
 
-        return _vkfft_cuda.make_config(shape, self.ndim, 1, dest_gpudata, s,
+        config = _vkfft_cuda.make_config(shape, self.ndim, 1, dest_gpudata, s,
                                        norm, self.precision, int(self.r2c),
                                        int(self.dct), int(self.dst),
                                        int(self.disableReorderFourStep), int(self.registerBoost),
@@ -309,7 +506,8 @@ class VkFFTApp(VkFFTAppBase):
                                        int(self.forceCallbackVersionRealTransforms),
                                        int(self._convolve), int(self._convolve_conj),
                                        int(self._convolve_norm), int(self._coordinateFeatures),
-                                         int(self._singleKernelMultipleBatches))
+                                       int(self._singleKernelMultipleBatches))
+        return config
 
     def fft(self, src, dest=None, convolve_kernel=None):
         """
@@ -456,18 +654,6 @@ def vkfft_version():
     """
     int_ver = _vkfft_cuda.vkfft_version()
     return "%d.%d.%d" % (int_ver // 10000, (int_ver % 10000) // 100, int_ver % 100)
-
-
-def vkfft_max_fft_dimensions():
-    """
-    Get the maximum number of dimensions VkFFT can handle. This is
-    set at compile time. VkFFT default is 4, pyvkfft sets this to 8.
-    Note that consecutive non-transformed are collapsed into a single
-    axis, reducing the effective number of dimensions.
-
-    :return: VKFFT_MAX_FFT_DIMENSIONS
-    """
-    return _vkfft_cuda.vkfft_max_fft_dimensions()
 
 
 def cuda_runtime_version(raw=False):

@@ -31,3 +31,4 @@ doc/ybuild
 
 *.nvvp
 /build/
+.vscode

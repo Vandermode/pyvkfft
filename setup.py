@@ -3,6 +3,9 @@
 
 import os
 import sys
+import sysconfig
+os.environ['VKFFT_BACKEND'] = 'cuda'
+
 import platform
 import subprocess
 from os.path import join as pjoin
@@ -81,7 +84,7 @@ def locate_cuda():
             libdir = pjoin(home, 'lib64')
         else:
             libdir = pjoin(home, 'lib')
-        extra_compile_args = ['-O3', '--ptxas-options=-v', '-std=c++11',
+        extra_compile_args = ['-O3', '--ptxas-options=-v', '-std=c++14',
                               '--compiler-options=-fPIC',
                               f'-DVKFFT_MAX_FFT_DIMENSIONS={VKFFT_MAX_FFT_DIMENSIONS}']
         extra_link_args = ['--shared', '-L%s' % libdir]
@@ -174,6 +177,50 @@ class build_ext_custom(build_ext_orig):
         return super().get_ext_filename(ext_name)
 
 
+class bdist_egg_disabled(bdist_egg):
+    """ Disabled bdist_egg, to prevent use of 'python setup.py install' """
+
+    def run(self):
+        sys.exit("Aborting building of eggs. Please use `pip install .` to install from source.")
+
+
+class pyvkfft_sdist(su_sdist):
+    """Hook to include git version of pyvkfft and VkFFT"""
+
+    def make_release_tree(self, base_dir, files):
+        super(pyvkfft_sdist, self).make_release_tree(base_dir, files)
+        try:
+            # Replace git_version_placeholder by real git version
+            version_file = os.path.join(base_dir, "pyvkfft/version.py")
+            vers = open(version_file).read()
+            os.remove(version_file)
+            with open(version_file, "w") as fh:
+                vers = vers.replace("vkfft_git_version_placeholder", vkfft_git_version())
+                vers = vers.replace("git_version_placeholder", git_version())
+                fh.write(vers)
+        except:
+            print("sdist: replacing git_version failed")
+
+
+class pyvkfft_install_lib(su_install_lib):
+    """Hook to include git version of pyvkfft and VkFFT"""
+
+    def run(self):
+        super(pyvkfft_install_lib, self).run()
+        try:
+            # Replace git_version_placeholder by real git version
+            version_file = os.path.join(self.install_dir, "pyvkfft/version.py")
+            vers = open(version_file).read()
+            os.remove(version_file)
+            with open(version_file, "w") as fh:
+                vers = vers.replace("vkfft_git_version_placeholder", vkfft_git_version())
+                vers = vers.replace("git_version_placeholder", git_version())
+                fh.write(vers)
+        except:
+            print("install_lib: replacing git_version failed")
+
+
+# Setup extensions
 ext_modules = []
 install_requires = ['numpy', 'psutil']
 exclude_packages = ['examples']
@@ -204,7 +251,6 @@ if 'cuda' not in exclude_packages:
                                    depends=['vkFFT.h']
                                    )
         ext_modules.append(vkfft_cuda_ext)
-        # install_requires.append("pycuda")
         try:
             import pycuda
 
@@ -239,97 +285,56 @@ if 'opencl' not in exclude_packages:
 
     ext_modules.append(vkfft_opencl_ext)
 
-with open("README.rst", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+
+# # Get Python include directory
+# python_include_dir = sysconfig.get_path('include')
+# python_include_dirs = [python_include_dir]
+
+# # Some systems have a separate directory for platform-specific headers
+# try:
+#     platinclude = sysconfig.get_path('platinclude')
+#     if platinclude != python_include_dir:
+#         python_include_dirs.append(platinclude)
+# except:
+#     pass
+
+# # If we're in a virtualenv/conda environment, also add the base Python include
+# if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+#     # We're in a virtual environment
+#     if 'CONDA_PREFIX' in os.environ:
+#         # For conda environments
+#         base_include = os.path.join(os.environ['CONDA_PREFIX'], 'include')
+#         if os.path.exists(base_include):
+#             python_include_dirs.append(base_include)
+#             python_include_dirs.append(os.path.join(base_include, f'python{sys.version_info.major}.{sys.version_info.minor}'))
+#     else:
+#         # For standard virtualenvs
+#         base_include = os.path.join(sys.base_prefix, 'include', 
+#                                    f'python{sys.version_info.major}.{sys.version_info.minor}')
+#         if os.path.exists(base_include):
+#             python_include_dirs.append(base_include)
+
+# # Add the pybind11 extension
+# vkfft_cuda_module = Extension(
+#     'pyvkfft.vkfft_cuda',  # Change this to be under the pyvkfft package
+#     sources=['src/vkfft_cuda_pybind.cu'],
+#     libraries=['nvrtc', 'cuda'],
+#     extra_compile_args=CUDA['extra_compile_args'],
+#     include_dirs=CUDA['include_dirs'] + ['src'] + python_include_dirs,
+#     extra_link_args=CUDA['extra_link_args'],
+#     depends=['vkFFT.h']
+# )
+# ext_modules.append(vkfft_cuda_module)
 
 
-class bdist_egg_disabled(bdist_egg):
-    """ Disabled bdist_egg, to prevent use of 'python setup.py install' """
-
-    def run(self):
-        sys.exit("Aborting building of eggs. Please use `pip install .` to install from source.")
-
-
-# Console scripts, available e.g. as 'pyvkfft-test'
-scripts = ['pyvkfft/scripts/pyvkfft_test.py', 'pyvkfft/scripts/pyvkfft_test_suite.py',
-           'pyvkfft/scripts/pyvkfft_benchmark.py', 'pyvkfft/scripts/pyvkfft_info.py']
-
-console_scripts = []
-for s in scripts:
-    s1 = os.path.splitext(os.path.split(s)[1])[0]
-    s0 = os.path.splitext(s)[0]
-    console_scripts.append("%s = %s:main" % (s1.replace('_', '-'), s0.replace('/', '.')))
-
-
-class pyvkfft_sdist(su_sdist):
-    """Hook to include git version of pyvkfft and VkFFT"""
-
-    def make_release_tree(self, base_dir, files):
-        super(pyvkfft_sdist, self).make_release_tree(base_dir, files)
-        try:
-            # Replace git_version_placeholder by real git version
-            version_file = os.path.join(base_dir, "pyvkfft/version.py")
-            vers = open(version_file).read()
-            os.remove(version_file)
-            with open(version_file, "w") as fh:
-                vers = vers.replace("vkfft_git_version_placeholder", vkfft_git_version())
-                vers = vers.replace("git_version_placeholder", git_version())
-                fh.write(vers)
-        except:
-            print("sdist: replacing git_version failed")
-
-
-class pyvkfft_install_lib(su_install_lib):
-    """Hook to include git version of pyvkfft and VkFFT"""
-
-    def run(self):
-        super(pyvkfft_install_lib, self).run()
-        try:
-            # print(self.install_dir, self.build_dir)
-            # Replace git_version_placeholder by real git version
-            version_file = os.path.join(self.install_dir, "pyvkfft/version.py")
-            vers = open(version_file).read()
-            os.remove(version_file)
-            with open(version_file, "w") as fh:
-                vers = vers.replace("vkfft_git_version_placeholder", vkfft_git_version())
-                vers = vers.replace("git_version_placeholder", git_version())
-                fh.write(vers)
-        except:
-            print("install_lib: replacing git_version failed")
-
-
-setup(name="pyvkfft",
-      version=__version__,
-      description="Python wrapper for the CUDA and OpenCL backends of VkFFT,"
-                  "providing GPU FFT for PyCUDA, PyOpenCL and CuPy",
-      long_description=long_description,
-      ext_modules=ext_modules,
-      packages=find_packages(exclude=exclude_packages),
-      include_package_data=True,
-      author="Vincent Favre-Nicolin",
-      author_email="favre@esrf.fr",
-      url="https://github.com/vincefn/pyvkfft",
-      project_urls={
-          "Source": "https://github.com/vincefn/pyvkfft",
-          "Documentation": "https://pyvkfft.readthedocs.io/",
-          "Bug Tracker": "https://github.com/vincefn/pyvkfft/issues",
-          "VkFFT project": "https://github.com/DTolm/VkFFT",
-      },
-      classifiers=[
-          "Programming Language :: Python :: 3",
-          "License :: OSI Approved :: MIT License",
-          "Operating System :: OS Independent",
-          "Environment :: GPU",
-      ],
-      license='MIT License',
-      cmdclass={'build_ext': build_ext_custom,
-                'bdist_egg': bdist_egg if 'bdist_egg' in sys.argv else bdist_egg_disabled,
-                'sdist': pyvkfft_sdist,
-                'install_lib': pyvkfft_install_lib
-                },
-      install_requires=install_requires,
-      extras_require={'doc': ['sphinx', 'nbsphinx', 'nbsphinx-link', 'sphinx-argparse',
-                              'sphinx-rtd-theme']},
-      test_suite="test",
-      entry_points={'console_scripts': console_scripts},
-      )
+# Call setup() with minimal arguments, as most are in setup.cfg
+setup(
+    name="pyvkfft",
+    ext_modules=ext_modules,
+    cmdclass={
+        'build_ext': build_ext_custom,
+        'bdist_egg': bdist_egg if 'bdist_egg' in sys.argv else bdist_egg_disabled,
+        'sdist': pyvkfft_sdist,
+        'install_lib': pyvkfft_install_lib
+    },
+)

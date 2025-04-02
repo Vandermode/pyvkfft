@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyvkfft"
+version = "2024.2b0"
+description = "Python bindings for VkFFT - Vulkan/CUDA/OpenCL Fast Fourier Transform library"
+readme = "README.rst"
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "psutil"
+]
+license = "MIT"
+authors = [
+    {name = "Vincent Favre-Nicolin"},
+    {name = "Kaixuan Wei"}
+]
+
+[project.scripts]
+pyvkfft-test = "pyvkfft.scripts.pyvkfft_test:main"
+pyvkfft-test-suite = "pyvkfft.scripts.pyvkfft_test_suite:main"
+pyvkfft-benchmark = "pyvkfft.scripts.pyvkfft_benchmark:main"
+pyvkfft-info = "pyvkfft.scripts.pyvkfft_info:main"
+
+
+[project.urls]
+Repository = "https://github.com/vincefn/pyvkfft"
+
+
+[project.optional-dependencies]
+cuda = ["pycuda"]
+opencl = ["pyopencl"]
+
+[tool.setuptools]
+packages = ["pyvkfft"]

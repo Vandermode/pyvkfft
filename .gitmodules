@@ -1,3 +1,5 @@
 [submodule "src/VkFFT"]
 	path = src/VkFFT
 	url = https://github.com/DTolm/VkFFT.git
+	branch = develop
+	update = rebase
