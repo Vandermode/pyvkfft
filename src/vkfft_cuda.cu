@@ -31,6 +31,8 @@ LIBRARY_API VkFFTConfiguration *make_config(const long *, const size_t, void *, 
 LIBRARY_API VkFFTApplication *init_app(const VkFFTConfiguration *, int *,
                                        size_t *, long *, long *);
 
+LIBRARY_API VkFFTApplication *init_app_from_config(const VkFFTConfiguration *);
+
 LIBRARY_API int fft(VkFFTApplication *app, void *, void *, void *);
 
 LIBRARY_API int ifft(VkFFTApplication *app, void *, void *);
@@ -302,6 +304,24 @@ VkFFTApplication *init_app(const VkFFTConfiguration *config, int *res,
     for (int i = 0; i < VKFFT_MAX_FFT_DIMENSIONS; i++)
         num_axis_upload[i] = app->localFFTPlan->numAxisUploads[i];
 
+    return app;
+}
+
+/** Initialise the VkFFTApplication from the given configuration.
+ *
+ * \param config: the pointer to the VkFFTConfiguration
+ * \return: the pointer to the newly created VkFFTApplication
+ */
+VkFFTApplication *init_app_from_config(const VkFFTConfiguration *config)
+{
+    VkFFTApplication *app = new VkFFTApplication({});
+    VkFFTResult res = initializeVkFFT(app, *config);
+    if (res != 0)
+    {
+        delete app;
+        cout << "Error initializing VkFFT " << "| code: " << res << " -> " << getVkFFTErrorString(res) << endl;
+        return 0;
+    }
     return app;
 }
 

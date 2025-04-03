@@ -736,11 +736,11 @@ class VkFFTApp:
 
         # These parameters will be filled in by the different backends
         # Size of the temp buffer allocated by VkFFT
-        self.tmp_buffer_nbytes = 0
+        # self.tmp_buffer_nbytes = 0
         # 0 or 1 for each axis, only if the Bluestein algorithm is used (same length as self.shape)
-        self.use_bluestein_fft = None
+        # self.use_bluestein_fft = None
         # number of axis upload per dimension (same length as self.shape)
-        self.nb_axis_upload = None
+        # self.nb_axis_upload = None
 
         # Experimental parameters. Not much difference is seen, so don't document this,
         # VkFFT default parameters seem fine.
@@ -757,6 +757,10 @@ class VkFFTApp:
             self.disableReorderFourStep = kwargs["disableReorderFourStep"]
         else:
             self.disableReorderFourStep = -1
+            
+        self.performZeropadding = kwargs["performZeropadding"] if "performZeropadding" in kwargs else None
+        self.fft_zeropad_left = kwargs['fft_zeropad_left'] if 'fft_zeropad_left' in kwargs else None
+        self.fft_zeropad_right = kwargs['fft_zeropad_right'] if 'fft_zeropad_right' in kwargs else None
 
         # uint64_t coalescedMemory - number of bytes to coalesce per one transaction.
         # For Nvidia and AMD is equal to 32, Intel is equal to 64. Going to work regardless,

@@ -7,6 +7,7 @@
 
 import ctypes
 import numpy as np
+from numpy.ctypeslib import as_ctypes
 from .tune import tune_vkfft
 
 try:
@@ -31,27 +32,15 @@ from .base import load_library, VkFFTApp as VkFFTAppBase, check_vkfft_result, ct
 try:
     _vkfft_cuda = load_library("_vkfft_cuda")
     
-    
-    def vkfft_max_fft_dimensions():
-        """
-        Get the maximum number of dimensions VkFFT can handle. This is
-        set at compile time. VkFFT default is 4, pyvkfft sets this to 8.
-        Note that consecutive non-transformed are collapsed into a single
-        axis, reducing the effective number of dimensions.
-
-        :return: VKFFT_MAX_FFT_DIMENSIONS
-        """
-        return _vkfft_cuda.vkfft_max_fft_dimensions()
-    
-    
     # Define constants from VkFFT
-    VKFFT_MAX_FFT_DIMENSIONS = vkfft_max_fft_dimensions()
-
+    VKFFT_MAX_FFT_DIMENSIONS = _vkfft_cuda.vkfft_max_fft_dimensions()
+    
     # Basic type definitions matching VkFFT types
     pfINT = ctypes.c_int64
     pfUINT = ctypes.c_uint64
     pfLD = ctypes.c_longdouble  # long double equivalent
-
+    pfUINT_array = pfUINT * VKFFT_MAX_FFT_DIMENSIONS
+    
 
     class VkFFTConfiguration(ctypes.Structure):
         """Python ctypes representation of VkFFTConfiguration structure for CUDA backend."""
@@ -227,16 +216,57 @@ try:
             ("streamCounter", pfUINT),  # stream counter
             ("streamID", pfUINT),  # stream ID
         ]
+        
+    class VkFFTAxis(ctypes.Structure):
+        pass
+        
+    class VkFFTPlan(ctypes.Structure):
+        _fields_ = [
+            ("actualFFTSizePerAxis", (pfUINT * VKFFT_MAX_FFT_DIMENSIONS) * VKFFT_MAX_FFT_DIMENSIONS),
+            ("numAxisUploads", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("axisSplit", (pfUINT * 4) * VKFFT_MAX_FFT_DIMENSIONS),
+            ("axes", (VkFFTAxis * 4) * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bigSequenceEvenR2C", pfUINT),
+            ("actualPerformR2CPerAxis", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("R2Cdecomposition", VkFFTAxis),
+            ("inverseBluesteinAxes", (VkFFTAxis * 4) * VKFFT_MAX_FFT_DIMENSIONS)
+        ]
 
+    class VkFFTApplication(ctypes.Structure):
+        _fields_ = [
+            ("configuration", VkFFTConfiguration),
+            ("localFFTPlan", ctypes.POINTER(VkFFTPlan)),
+            ("localFFTPlan_inverse", ctypes.POINTER(VkFFTPlan)),
+            ("actualNumBatches", pfUINT),
+            ("firstAxis", pfUINT),
+            ("lastAxis", pfUINT),
+            ("useBluesteinFFT", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferRaderUintLUT", ((ctypes.c_void_p) * 4) * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferBluestein", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferBluesteinFFT", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferBluesteinIFFT", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferRaderUintLUTSize", (pfUINT * 4) * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferBluesteinSize", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("applicationBluesteinString", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
+            ("applicationBluesteinStringSize", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("numRaderFFTPrimes", pfUINT),
+            ("rader_primes", pfUINT * 30),
+            ("rader_buffer_size", pfUINT * 30),
+            ("raderFFTkernel", ctypes.c_void_p * 30),
+            ("applicationStringOffsetRader", pfUINT),
+            ("currentApplicationStringPos", pfUINT),
+            ("applicationStringSize", pfUINT),
+            ("saveApplicationString", ctypes.c_void_p)
+        ]
 
     class _types:
         """Aliases"""
-        vkfft_config = ctypes.POINTER(VkFFTConfiguration)
+        vkfft_config_p = ctypes.POINTER(VkFFTConfiguration)
+        vkfft_app_p = ctypes.POINTER(VkFFTApplication)
         stream = ctypes.c_void_p
-        vkfft_app = ctypes.c_void_p
 
 
-    _vkfft_cuda.make_config.restype = _types.vkfft_config
+    _vkfft_cuda.make_config.restype = _types.vkfft_config_p
     _vkfft_cuda.make_config.argtypes = [ctype_int_size_p, ctypes.c_size_t,
                                         ctypes.c_void_p, ctypes.c_void_p, _types.stream,
                                         ctypes.c_int, ctypes.c_size_t, ctypes.c_int,
@@ -247,22 +277,25 @@ try:
                                         ctypes.c_int, ctype_int_size_p, ctypes.c_int,
                                         ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 
-    _vkfft_cuda.init_app.restype = ctypes.c_void_p
-    _vkfft_cuda.init_app.argtypes = [_types.vkfft_config, ctypes.POINTER(ctypes.c_int),
+    _vkfft_cuda.init_app.restype = _types.vkfft_app_p
+    _vkfft_cuda.init_app.argtypes = [_types.vkfft_config_p, ctypes.POINTER(ctypes.c_int),
                                      ctypes.POINTER(ctypes.c_size_t),
                                      ctype_int_size_p, ctype_int_size_p]
+    
+    _vkfft_cuda.init_app_from_config.restype = _types.vkfft_app_p
+    _vkfft_cuda.init_app_from_config.argtypes = [_types.vkfft_config_p]
 
     _vkfft_cuda.fft.restype = ctypes.c_int
-    _vkfft_cuda.fft.argtypes = [_types.vkfft_app, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    _vkfft_cuda.fft.argtypes = [_types.vkfft_app_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
 
     _vkfft_cuda.ifft.restype = ctypes.c_int
-    _vkfft_cuda.ifft.argtypes = [_types.vkfft_app, ctypes.c_void_p, ctypes.c_void_p]
+    _vkfft_cuda.ifft.argtypes = [_types.vkfft_app_p, ctypes.c_void_p, ctypes.c_void_p]
 
     _vkfft_cuda.free_app.restype = None
-    _vkfft_cuda.free_app.argtypes = [_types.vkfft_app]
+    _vkfft_cuda.free_app.argtypes = [_types.vkfft_app_p]
 
     _vkfft_cuda.free_config.restype = None
-    _vkfft_cuda.free_config.argtypes = [_types.vkfft_config]
+    _vkfft_cuda.free_config.argtypes = [_types.vkfft_config_p]
 
     _vkfft_cuda.vkfft_max_fft_dimensions.restype = ctypes.c_uint32
     _vkfft_cuda.vkfft_max_fft_dimensions.argtypes = None
@@ -401,23 +434,32 @@ class VkFFTApp(VkFFTAppBase):
 
         self.stream = stream
 
-        self.config = self._make_config()
+        self.config = self.make_config()
         if self.config is None:
             raise RuntimeError("Error creating VkFFTConfiguration. Was the CUDA context properly initialised ?")
 
-        res = ctypes.c_int(0)
-        # Size of tmp buffer allocated by VkFFT - if any
-        tmp_buffer_nbytes = ctypes.c_size_t(0)
-        # 0 or 1 for each axis, only if the Bluestein algorithm is used
-        use_bluestein_fft = np.zeros(vkfft_max_fft_dimensions(), dtype=int)
-        # number of axis upload per dimension
-        num_axis_upload = np.zeros(vkfft_max_fft_dimensions(), dtype=int)
+        # res = ctypes.c_int(0)
+        # # Size of tmp buffer allocated by VkFFT - if any
+        # tmp_buffer_nbytes = ctypes.c_size_t(0)
+        # # 0 or 1 for each axis, only if the Bluestein algorithm is used
+        # use_bluestein_fft = np.zeros(VKFFT_MAX_FFT_DIMENSIONS, dtype=int)
+        # # number of axis upload per dimension
+        # num_axis_upload = np.zeros(VKFFT_MAX_FFT_DIMENSIONS, dtype=int)
 
-        self.app = _vkfft_cuda.init_app(self.config, ctypes.byref(res),
-                                        ctypes.byref(tmp_buffer_nbytes),
-                                        use_bluestein_fft, num_axis_upload)
+        # self.app = _vkfft_cuda.init_app(self.config, ctypes.byref(res),
+        #                                 ctypes.byref(tmp_buffer_nbytes),
+        #                                 use_bluestein_fft, num_axis_upload)
+        
+        if self.performZeropadding is not None:
+            self.config.contents.performZeropadding = as_ctypes(self.performZeropadding) if isinstance(self.performZeropadding, np.ndarray) else self.performZeropadding
+        if self.fft_zeropad_left is not None:
+            self.config.contents.fft_zeropad_left = as_ctypes(self.fft_zeropad_left) if isinstance(self.fft_zeropad_left, np.ndarray) else self.fft_zeropad_left
+        if self.fft_zeropad_right is not None:
+            self.config.contents.fft_zeropad_right = as_ctypes(self.fft_zeropad_right) if isinstance(self.fft_zeropad_right, np.ndarray) else self.fft_zeropad_right
+        
+        self.app = _vkfft_cuda.init_app_from_config(self.config)
 
-        check_vkfft_result(res, shape, dtype, ndim, inplace, norm, r2c, dct, dst, axes, "cuda")
+        # check_vkfft_result(res, shape, dtype, ndim, inplace, norm, r2c, dct, dst, axes, "cuda")
 
         if self.app is None:
             raise RuntimeError("Error creating VkFFTApplication. Was the CUDA driver initialised ?")
@@ -428,14 +470,40 @@ class VkFFTApp(VkFFTAppBase):
             #  has been given because we don't have access to cuStreamGetCtx from python...
             self._ctx = cu_drv.Context.get_current()
 
-        self.tmp_buffer_nbytes = np.int64(tmp_buffer_nbytes)
-        self.use_bluestein_fft = [bool(n) for n in use_bluestein_fft[:len(self.shape)]]
-        self.nb_axis_upload = [int(num_axis_upload[i] * (self.skip_axis[i] is False))
-                               for i in range(len(self.shape))]
+        # self.tmp_buffer_nbytes = np.int64(tmp_buffer_nbytes)
+        # self.use_bluestein_fft = [bool(n) for n in use_bluestein_fft[:len(self.shape)]]
+        # self.nb_axis_upload = [int(num_axis_upload[i] * (self.skip_axis[i] is False))
+        #                        for i in range(len(self.shape))]
+        
         # if convolve and max(self.nb_axis_upload) > 1:
         #     raise RuntimeError(f"On-the-fly convolution is not supported with axis multi-upload [{self.__str__()}]")
         if verbose:
             print(self)
+            
+    @property
+    def tmp_buffer_nbytes(self):
+        if bool(self.config.contents.allocateTempBuffer):
+            res = np.int64(self.config.contents.tempBufferSize[0])
+        else:
+            res = 0
+        return res
+    
+    @property
+    def use_bluestein_fft(self):
+        use_bluestein_fft = np.array(self.app.contents.useBluesteinFFT)
+        res = [bool(n) for n in use_bluestein_fft[:len(self.shape)]]
+        return res
+    
+    @property
+    def nb_axis_upload(self):
+        num_axis_upload = np.array(self.app.contents.localFFTPlan.contents.numAxisUploads)
+        res = [int(num_axis_upload[i] * (self.skip_axis[i] is False)) for i in range(len(self.shape))]
+        return res
+    
+    @property
+    def axis_split(self):
+        _axis_split = np.array(self.app.contents.localFFTPlan.contents.axisSplit)
+        return _axis_split[:len(self.shape)]
 
     def __del__(self):
         """ Takes care of deleting allocated memory in the underlying
@@ -446,19 +514,19 @@ class VkFFTApp(VkFFTAppBase):
         if self.config is not None:
             _vkfft_cuda.free_config(self.config)
 
-    def _make_config(self):
+    def make_config(self):
         """ Create a vkfft configuration for a FFT transform"""
-        if len(self.shape) > vkfft_max_fft_dimensions():
+        if len(self.shape) > VKFFT_MAX_FFT_DIMENSIONS:
             raise RuntimeError(f"Too many FFT dimensions after collapsing non-transform axes: "
-                               f"{len(self.shape)}>{vkfft_max_fft_dimensions()}")
+                               f"{len(self.shape)}>{VKFFT_MAX_FFT_DIMENSIONS}")
 
-        shape = np.ones(vkfft_max_fft_dimensions(), dtype=int)
+        shape = np.ones(VKFFT_MAX_FFT_DIMENSIONS, dtype=int)
         shape[:len(self.shape)] = self.shape
 
-        skip = np.zeros(vkfft_max_fft_dimensions(), dtype=int)
+        skip = np.zeros(VKFFT_MAX_FFT_DIMENSIONS, dtype=int)
         skip[:len(self.skip_axis)] = self.skip_axis
 
-        grouped_batch = np.empty(vkfft_max_fft_dimensions(), dtype=int)
+        grouped_batch = np.empty(VKFFT_MAX_FFT_DIMENSIONS, dtype=int)
         grouped_batch.fill(-1)
         grouped_batch[:len(self.groupedBatch)] = self.groupedBatch
 

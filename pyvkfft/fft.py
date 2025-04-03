@@ -159,16 +159,16 @@ def _prepare_transform(src, dest, cl_queue, cuda_stream, r2c=False, r2c_odd=Fals
         return backend, inplace, dest, cl_queue, cuda_stream, devctx
 
 
-@lru_cache(maxsize=config.FFT_CACHE_NB)
+# @lru_cache(maxsize=config.FFT_CACHE_NB)
 def _get_fft_app(backend, shape, dtype, inplace, ndim, axes, norm, cuda_stream, cl_queue,
-                 devctx, strides=None, tune=False):
+                 devctx, strides=None, tune=False, **kwargs):
     del devctx  # Variable is just used for proper lru_cache
     sback = {Backend.PYCUDA: 'pycuda', Backend.CUPY: 'cupy', Backend.PYOPENCL: 'pyopencl'}[backend]
     tune_config = {'backend': sback} if tune else None
     if backend in [Backend.PYCUDA, Backend.CUPY]:
         return VkFFTApp_cuda(shape, dtype, ndim=ndim, inplace=inplace,
                              stream=cuda_stream, norm=norm, axes=axes, strides=strides,
-                             tune_config=tune_config)
+                             tune_config=tune_config, **kwargs)
     elif backend == Backend.PYOPENCL:
         return VkFFTApp_cl(shape, dtype, cl_queue, ndim=ndim, inplace=inplace,
                            norm=norm, axes=axes, strides=strides,
@@ -224,7 +224,7 @@ def _get_dst_app(backend, shape, dtype, inplace, ndim, norm, dst_type,
 
 
 def fftn(src, dest=None, ndim=None, norm=1, axes=None, cuda_stream=None, cl_queue=None,
-         return_scale=False, tune=False):
+         return_scale=False, tune=False, **kwargs):
     """
     Perform a FFT on a GPU array, automatically creating the VkFFTApp
     and caching it for future re-use.
@@ -263,7 +263,7 @@ def fftn(src, dest=None, ndim=None, norm=1, axes=None, cuda_stream=None, cl_queu
     """
     backend, inplace, dest, cl_queue, cuda_stream, devctx = _prepare_transform(src, dest, cl_queue, cuda_stream, False)
     app = _get_fft_app(backend, src.shape, src.dtype, inplace, ndim, axes, norm, cuda_stream, cl_queue, devctx,
-                       strides=src.strides, tune=tune)
+                       strides=src.strides, tune=tune, **kwargs)
     if backend == Backend.PYOPENCL:
         app.fft(src, dest, queue=cl_queue)
     else:
