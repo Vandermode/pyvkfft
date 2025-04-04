@@ -47,7 +47,7 @@ try:
         _fields_ = [
             # Required parameters
             ("FFTdim", pfUINT),  # FFT dimensionality (1, 2 or 3)
-            ("size", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # WHD -system dimensions
+            ("size", pfUINT_array),  # WHD -system dimensions
             ("device", ctypes.POINTER(ctypes.c_void_p)),  # pointer to CUDA device
             ("stream", ctypes.POINTER(ctypes.c_void_p)),  # pointer to CUDA streams
             ("num_streams", pfUINT),  # number of streams for asynchronous execution
@@ -103,9 +103,9 @@ try:
             ("inverseReturnToInputBuffer", pfUINT),  # return inverse transform to input buffer
             ("numberBatches", pfUINT),  # number of batches
             ("useUint64", pfUINT),  # use 64-bit addressing
-            ("omitDimension", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # disable FFT for specific dimensions
+            ("omitDimension", pfUINT_array),  # disable FFT for specific dimensions
             ("performBandwidthBoost", ctypes.c_int),  # reduce coalesced number for strided axes
-            ("groupedBatch", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # FFTs per threadblock per dimension
+            ("groupedBatch", pfUINT_array),  # FFTs per threadblock per dimension
             ("optimizePow2StridesTempBuffer", ctypes.c_int),  # optimize power of 2 strides
             ("inStridePadTempBuffer", pfUINT),  # pad elements for optimized strides
             ("outStridePadTempBuffer", pfUINT),  # pad elements to for optimized strides
@@ -122,7 +122,7 @@ try:
             ("performR2C", pfUINT),  # R2C/C2R decomposition
             ("performDCT", pfUINT),  # DCT transformation
             ("performDST", pfUINT),  # DST transformation
-            ("performR2R", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # DCT/DST per axis
+            ("performR2R", pfUINT_array),  # DCT/DST per axis
             ("disableMergeSequencesR2C", pfUINT),  # disable merging of real sequences
             ("forceCallbackVersionRealTransforms", pfUINT),  # force callback for R2C/R2R
             
@@ -135,11 +135,11 @@ try:
             ("makeInversePlanOnly", pfUINT),  # inverse FFT only
             
             # Buffer layout parameters
-            ("bufferStride", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # buffer strides
+            ("bufferStride", pfUINT_array),  # buffer strides
             ("isInputFormatted", pfUINT),  # input buffer formatting
             ("isOutputFormatted", pfUINT),  # output buffer formatting
-            ("inputBufferStride", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # input buffer strides
-            ("outputBufferStride", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # output buffer strides
+            ("inputBufferStride", pfUINT_array),  # input buffer strides
+            ("outputBufferStride", pfUINT_array),  # output buffer strides
             ("swapTo2Stage4Step", pfUINT),  # switch to 2 upload 4-step FFT
             ("swapTo3Stage4Step", pfUINT),  # switch to 3 upload 4-step FFT
             
@@ -167,9 +167,9 @@ try:
             ("fixMaxRaderRadixFFT", pfUINT),  # limit Rader to specific radix
             
             # Zero padding parameters
-            ("performZeropadding", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # enable zero padding
-            ("fft_zeropad_left", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # left zero pad boundaries
-            ("fft_zeropad_right", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # right zero pad boundaries
+            ("performZeropadding", pfUINT_array),  # enable zero padding
+            ("fft_zeropad_left", pfUINT_array),  # left zero pad boundaries
+            ("fft_zeropad_right", pfUINT_array),  # right zero pad boundaries
             ("frequencyZeroPadding", pfUINT),  # frequency domain padding
             
             # Convolution parameters
@@ -195,8 +195,8 @@ try:
             # Device capabilities (auto-filled but can be overridden)
             ("computeCapabilityMajor", pfUINT),  # CUDA compute capability major
             ("computeCapabilityMinor", pfUINT),  # CUDA compute capability minor
-            ("maxComputeWorkGroupCount", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # max work group count
-            ("maxComputeWorkGroupSize", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),  # max work group size
+            ("maxComputeWorkGroupCount", pfUINT_array),  # max work group count
+            ("maxComputeWorkGroupSize", pfUINT_array),  # max work group size
             ("maxThreadsNum", pfUINT),  # max threads
             ("sharedMemorySizeStatic", pfUINT),  # static shared memory size
             ("sharedMemorySize", pfUINT),  # total shared memory size
@@ -217,17 +217,41 @@ try:
             ("streamID", pfUINT),  # stream ID
         ]
         
+    class VkFFTLaunchParams(ctypes.Structure):
+        _fields_ = [
+            # Pointers to buffers
+            ("buffer", ctypes.POINTER(ctypes.c_void_p)),                 # void* const*
+            ("tempBuffer", ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))),  # void**
+            ("inputBuffer", ctypes.POINTER(ctypes.c_void_p)),            # void* const*
+            ("outputBuffer", ctypes.POINTER(ctypes.c_void_p)),           # void* const*
+            ("kernel", ctypes.POINTER(ctypes.c_void_p)),                 # void* const*
+            
+            # Offsets for buffers (in bytes)
+            ("bufferOffset", pfUINT),                           # pfUINT
+            ("tempBufferOffset", pfUINT),                       # pfUINT
+            ("inputBufferOffset", pfUINT),                      # pfUINT
+            ("outputBufferOffset", pfUINT),                     # pfUINT
+            ("kernelOffset", pfUINT),                           # pfUINT
+            
+            # Offsets for imaginary parts when using separate complex components
+            ("bufferOffsetImaginary", pfUINT),                  # pfUINT
+            ("tempBufferOffsetImaginary", pfUINT),              # pfUINT
+            ("inputBufferOffsetImaginary", pfUINT),             # pfUINT
+            ("outputBufferOffsetImaginary", pfUINT),            # pfUINT
+            ("kernelOffsetImaginary", pfUINT),                  # pfUINT
+        ]
+        
     class VkFFTAxis(ctypes.Structure):
         pass
         
     class VkFFTPlan(ctypes.Structure):
         _fields_ = [
-            ("actualFFTSizePerAxis", (pfUINT * VKFFT_MAX_FFT_DIMENSIONS) * VKFFT_MAX_FFT_DIMENSIONS),
-            ("numAxisUploads", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("actualFFTSizePerAxis", (pfUINT_array) * VKFFT_MAX_FFT_DIMENSIONS),
+            ("numAxisUploads", pfUINT_array),
             ("axisSplit", (pfUINT * 4) * VKFFT_MAX_FFT_DIMENSIONS),
             ("axes", (VkFFTAxis * 4) * VKFFT_MAX_FFT_DIMENSIONS),
             ("bigSequenceEvenR2C", pfUINT),
-            ("actualPerformR2CPerAxis", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("actualPerformR2CPerAxis", pfUINT_array),
             ("R2Cdecomposition", VkFFTAxis),
             ("inverseBluesteinAxes", (VkFFTAxis * 4) * VKFFT_MAX_FFT_DIMENSIONS)
         ]
@@ -240,15 +264,15 @@ try:
             ("actualNumBatches", pfUINT),
             ("firstAxis", pfUINT),
             ("lastAxis", pfUINT),
-            ("useBluesteinFFT", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("useBluesteinFFT", pfUINT_array),
             ("bufferRaderUintLUT", ((ctypes.c_void_p) * 4) * VKFFT_MAX_FFT_DIMENSIONS),
             ("bufferBluestein", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
             ("bufferBluesteinFFT", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
             ("bufferBluesteinIFFT", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
             ("bufferRaderUintLUTSize", (pfUINT * 4) * VKFFT_MAX_FFT_DIMENSIONS),
-            ("bufferBluesteinSize", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("bufferBluesteinSize", pfUINT_array),
             ("applicationBluesteinString", ctypes.c_void_p * VKFFT_MAX_FFT_DIMENSIONS),
-            ("applicationBluesteinStringSize", pfUINT * VKFFT_MAX_FFT_DIMENSIONS),
+            ("applicationBluesteinStringSize", pfUINT_array),
             ("numRaderFFTPrimes", pfUINT),
             ("rader_primes", pfUINT * 30),
             ("rader_buffer_size", pfUINT * 30),

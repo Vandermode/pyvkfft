@@ -159,16 +159,16 @@ def _prepare_transform(src, dest, cl_queue, cuda_stream, r2c=False, r2c_odd=Fals
         return backend, inplace, dest, cl_queue, cuda_stream, devctx
 
 
-# @lru_cache(maxsize=config.FFT_CACHE_NB)
+@lru_cache(maxsize=config.FFT_CACHE_NB)
 def _get_fft_app(backend, shape, dtype, inplace, ndim, axes, norm, cuda_stream, cl_queue,
-                 devctx, strides=None, tune=False, **kwargs):
+                 devctx, strides=None, tune=False):
     del devctx  # Variable is just used for proper lru_cache
     sback = {Backend.PYCUDA: 'pycuda', Backend.CUPY: 'cupy', Backend.PYOPENCL: 'pyopencl'}[backend]
     tune_config = {'backend': sback} if tune else None
     if backend in [Backend.PYCUDA, Backend.CUPY]:
         return VkFFTApp_cuda(shape, dtype, ndim=ndim, inplace=inplace,
                              stream=cuda_stream, norm=norm, axes=axes, strides=strides,
-                             tune_config=tune_config, **kwargs)
+                             tune_config=tune_config)
     elif backend == Backend.PYOPENCL:
         return VkFFTApp_cl(shape, dtype, cl_queue, ndim=ndim, inplace=inplace,
                            norm=norm, axes=axes, strides=strides,
