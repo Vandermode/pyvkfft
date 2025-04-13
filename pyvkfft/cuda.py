@@ -18,6 +18,7 @@ except ImportError:
     has_pycuda = False
 try:
     import cupy as cp
+    import jax
 
     has_cupy = True
 except ImportError:
@@ -30,7 +31,7 @@ except ImportError:
 from .base import load_library, VkFFTApp as VkFFTAppBase, check_vkfft_result, ctype_int_size_p
 
 try:
-    _vkfft_cuda = load_library("_vkfft_cuda")
+    library = _vkfft_cuda = load_library("_vkfft_cuda")
     
     # Define constants from VkFFT
     VKFFT_MAX_FFT_DIMENSIONS = _vkfft_cuda.vkfft_max_fft_dimensions()
@@ -503,11 +504,16 @@ class VkFFTApp(VkFFTAppBase):
         #     raise RuntimeError(f"On-the-fly convolution is not supported with axis multi-upload [{self.__str__()}]")
         if verbose:
             print(self)
-            
+    
+    @property
+    def buffer_size(self):
+        res = np.uint64(self.config.contents.bufferSize[0])
+        return res
+
     @property
     def tmp_buffer_nbytes(self):
         if bool(self.config.contents.allocateTempBuffer):
-            res = np.int64(self.config.contents.tempBufferSize[0])
+            res = np.uint64(self.config.contents.tempBufferSize[0])
         else:
             res = 0
         return res
@@ -616,7 +622,7 @@ class VkFFTApp(VkFFTAppBase):
         """
         use_cupy = False
         if has_cupy:
-            if isinstance(src, cp.ndarray):
+            if isinstance(src, (cp.ndarray, jax.numpy.ndarray) ):
                 use_cupy = True
         if use_cupy:
             src_ptr = src.__cuda_array_interface__['data'][0]

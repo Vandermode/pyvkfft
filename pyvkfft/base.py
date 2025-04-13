@@ -627,6 +627,7 @@ class VkFFTApp:
         """
         self.app = None
         self.config = None
+        self.dtype = dtype
         if ((dct or dst) and r2c) or (dct and dst):
             raise RuntimeError("R2C, DCT and DST are mutually exclusive")
         if (r2c or dct or dst) and dtype not in [np.float16, np.float32, np.float64]:

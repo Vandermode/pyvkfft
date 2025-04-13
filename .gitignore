@@ -32,3 +32,4 @@ doc/ybuild
 *.nvvp
 /build/
 .vscode
+rms_norm.cc

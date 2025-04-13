@@ -20,6 +20,7 @@ from setuptools.command.install_lib import install_lib as su_install_lib
 from setuptools.command.sdist import sdist as su_sdist
 from pyvkfft.version import __version__, git_version, vkfft_git_version
 
+
 # Maximum number of dimensions VkFFT can handle. VkFFT sets this to 4,
 # pyvkfft uses a default of 8. Set an environment variable
 # VKFFT_MAX_FFT_DIMENSIONS to increase this
@@ -84,7 +85,7 @@ def locate_cuda():
             libdir = pjoin(home, 'lib64')
         else:
             libdir = pjoin(home, 'lib')
-        extra_compile_args = ['-O3', '--ptxas-options=-v', '-std=c++14',
+        extra_compile_args = ['-O3', '--ptxas-options=-v', '-std=c++17',
                               '--compiler-options=-fPIC',
                               f'-DVKFFT_MAX_FFT_DIMENSIONS={VKFFT_MAX_FFT_DIMENSIONS}']
         extra_link_args = ['--shared', '-L%s' % libdir]
@@ -140,8 +141,15 @@ def locate_opencl():
 class build_ext_custom(build_ext_orig):
     """Custom `build_ext` command which will correctly compile and link
     the OpenCL and CUDA modules. The hooks are based on the name of the extension"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
     def build_extension(self, ext):
+        # Print build information
+        print(f"[i] Building extension: {ext.name}")
+        print(f"[i] Build directory: {self.build_temp}")
+        print(f"[i] Build lib directory: {self.build_lib}")
+        
         if "cuda" in ext.name:
             # Use nvcc for compilation. This assumes all sources are .cu files
             # for this extension.
@@ -149,18 +157,15 @@ class build_ext_custom(build_ext_orig):
             # Create unix compiler patched for cu
             self.compiler = unixccompiler.UnixCCompiler()
             self.compiler.src_extensions.append('.cu')
-            tmp = CUDA['nvcc']  # .replace('\\\\','toto')
+            tmp = CUDA['nvcc']
             self.compiler.set_executable('compiler_so', [tmp])
             self.compiler.set_executable('linker_so', [tmp])
             if platform.system() == "Windows":
                 CUDA['extra_link_args'] += ['--shared', '-Xcompiler', '-MD']
                 # pythonXX.lib must be in the linker paths
-                # Is using sys.prefix\libs always correct ?
                 CUDA['extra_link_args'].append('-L%s' % pjoin(sys.prefix, 'libs'))
 
             super().build_extension(ext)
-            # Restore default linker and compiler
-            self.compiler = default_compiler
         else:
             super().build_extension(ext)
 
@@ -175,6 +180,23 @@ class build_ext_custom(build_ext_orig):
         if ("opencl" in ext_name or "cuda" in ext_name) and platform.system() == "Windows":
             return ext_name + '.so'
         return super().get_ext_filename(ext_name)
+
+    # Modify the build_extensions method to ensure main CUDA module is built first
+    def build_extensions(self):
+        # Reorder extensions to build the main extension first
+        cuda_ext = [ext for ext in self.extensions if '_vkfft_cuda' in ext.name and '_ffi' not in ext.name]
+        cuda_ffi_ext = [ext for ext in self.extensions if '_vkfft_cuda_ffi' in ext.name]
+        other_ext = [ext for ext in self.extensions if ext not in cuda_ext and ext not in cuda_ffi_ext]
+        
+        # Build in the correct order
+        ordered_extensions = cuda_ext + cuda_ffi_ext + other_ext
+        
+        # Set extensions in order
+        self.extensions = ordered_extensions
+        
+        # Now build all extensions
+        for ext in self.extensions:
+            self.build_extension(ext)
 
 
 class bdist_egg_disabled(bdist_egg):
@@ -220,6 +242,35 @@ class pyvkfft_install_lib(su_install_lib):
             print("install_lib: replacing git_version failed")
 
 
+# Get Python include directory
+python_include_dir = sysconfig.get_path('include')
+python_include_dirs = [python_include_dir]
+
+# Some systems have a separate directory for platform-specific headers
+try:
+    platinclude = sysconfig.get_path('platinclude')
+    if platinclude != python_include_dir:
+        python_include_dirs.append(platinclude)
+except:
+    pass
+
+# If we're in a virtualenv/conda environment, also add the base Python include
+if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+    # We're in a virtual environment
+    if 'CONDA_PREFIX' in os.environ:
+        # For conda environments
+        base_include = os.path.join(os.environ['CONDA_PREFIX'], 'include')
+        if os.path.exists(base_include):
+            python_include_dirs.append(base_include)
+            python_include_dirs.append(os.path.join(base_include, f'python{sys.version_info.major}.{sys.version_info.minor}'))
+    else:
+        # For standard virtualenvs
+        base_include = os.path.join(sys.base_prefix, 'include', 
+                                   f'python{sys.version_info.major}.{sys.version_info.minor}')
+        if os.path.exists(base_include):
+            python_include_dirs.append(base_include)
+
+
 # Setup extensions
 ext_modules = []
 install_requires = ['numpy', 'psutil']
@@ -242,18 +293,31 @@ if "VKFFT_BACKEND" in os.environ:
 if 'cuda' not in exclude_packages:
     try:
         CUDA = locate_cuda()
-        vkfft_cuda_ext = Extension('pyvkfft._vkfft_cuda',
-                                   sources=['src/vkfft_cuda.cu'],
-                                   libraries=['nvrtc', 'cuda'],
-                                   extra_compile_args=CUDA['extra_compile_args'],
-                                   include_dirs=CUDA['include_dirs'] + ['src'],
-                                   extra_link_args=CUDA['extra_link_args'],
-                                   depends=['vkFFT.h']
-                                   )
-        ext_modules.append(vkfft_cuda_ext)
+        # vkfft_cuda_ext = Extension('pyvkfft._vkfft_cuda',
+        #                            sources=['src/vkfft_cuda.cu'],
+        #                            libraries=['nvrtc', 'cuda'],
+        #                            extra_compile_args=CUDA['extra_compile_args'],
+        #                            include_dirs=CUDA['include_dirs'] + ['src'],
+        #                            extra_link_args=CUDA['extra_link_args'],
+        #                            depends=['vkFFT.h']
+        #                            )
+        # ext_modules.append(vkfft_cuda_ext)
+        
+        # FFI extension for CUDA
+        vkfft_cuda_ffi_ext = Extension(
+            'pyvkfft._vkfft_cuda',
+            sources=['src/vkfft_cuda_ffi.cu'],
+            libraries=['nvrtc', 'cuda'],
+            extra_compile_args=CUDA['extra_compile_args'],
+            include_dirs=CUDA['include_dirs'] + ['src'] + python_include_dirs,
+            extra_link_args=CUDA['extra_link_args'],
+            depends=['vkFFT.h', 'src/vkfft_cuda.cu'],
+        )
+
+        ext_modules.append(vkfft_cuda_ffi_ext)
+            
         try:
             import pycuda
-
             has_pycuda = True
         except ImportError:
             has_pycuda = False
@@ -286,48 +350,6 @@ if 'opencl' not in exclude_packages:
     ext_modules.append(vkfft_opencl_ext)
 
 
-# # Get Python include directory
-# python_include_dir = sysconfig.get_path('include')
-# python_include_dirs = [python_include_dir]
-
-# # Some systems have a separate directory for platform-specific headers
-# try:
-#     platinclude = sysconfig.get_path('platinclude')
-#     if platinclude != python_include_dir:
-#         python_include_dirs.append(platinclude)
-# except:
-#     pass
-
-# # If we're in a virtualenv/conda environment, also add the base Python include
-# if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
-#     # We're in a virtual environment
-#     if 'CONDA_PREFIX' in os.environ:
-#         # For conda environments
-#         base_include = os.path.join(os.environ['CONDA_PREFIX'], 'include')
-#         if os.path.exists(base_include):
-#             python_include_dirs.append(base_include)
-#             python_include_dirs.append(os.path.join(base_include, f'python{sys.version_info.major}.{sys.version_info.minor}'))
-#     else:
-#         # For standard virtualenvs
-#         base_include = os.path.join(sys.base_prefix, 'include', 
-#                                    f'python{sys.version_info.major}.{sys.version_info.minor}')
-#         if os.path.exists(base_include):
-#             python_include_dirs.append(base_include)
-
-# # Add the pybind11 extension
-# vkfft_cuda_module = Extension(
-#     'pyvkfft.vkfft_cuda',  # Change this to be under the pyvkfft package
-#     sources=['src/vkfft_cuda_pybind.cu'],
-#     libraries=['nvrtc', 'cuda'],
-#     extra_compile_args=CUDA['extra_compile_args'],
-#     include_dirs=CUDA['include_dirs'] + ['src'] + python_include_dirs,
-#     extra_link_args=CUDA['extra_link_args'],
-#     depends=['vkFFT.h']
-# )
-# ext_modules.append(vkfft_cuda_module)
-
-
-# Call setup() with minimal arguments, as most are in setup.cfg
 setup(
     name="pyvkfft",
     ext_modules=ext_modules,
