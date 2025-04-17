@@ -33,6 +33,15 @@ try:
 except (ImportError, OSError):
     has_opencl = False
 
+try:
+    import jax
+    import jax.numpy as jnp
+    from .jax import VkFFTApp as VkFFTApp_jax, vkfft_version
+
+    has_jax = True
+except (ImportError, OSError):
+    has_jax = False
+
 
 class Backend(Enum):
     """ Backend language & library"""
@@ -40,6 +49,7 @@ class Backend(Enum):
     PYCUDA = 1
     PYOPENCL = 2
     CUPY = 3
+    JAX = 4
 
 
 def _prepare_transform(src, dest, cl_queue, cuda_stream, r2c=False, r2c_odd=False):
@@ -143,12 +153,15 @@ def _prepare_transform(src, dest, cl_queue, cuda_stream, r2c=False, r2c_odd=Fals
             if isinstance(cuda_stream, cp.cuda.Stream):
                 cuda_stream = cuda_stream.ptr
             devctx = cp.cuda.Device().id
+            
+    # if backend == Backend.JAX:
+    #     if isinstance(src, jnp.ndarray):
+    #         backend = Backend.JAX            
 
     if backend == Backend.UNKNOWN:
         raise RuntimeError("Could note determine the type of GPU array supplied, or the "
                            "corresponding backend is not installed "
-                           "(has_pycuda=%d, has_pyopencl=%d, has_cupy=%d)" %
-                           (has_pycuda, has_opencl, has_cupy))
+                           f"(has_pycuda={has_pycuda:d}, has_pyopencl={has_opencl:d}, has_cupy={has_cupy:d}, has_jax={has_jax:d})")
 
     inplace = dest_ptr == src_ptr
     if r2c:
@@ -266,6 +279,8 @@ def fftn(src, dest=None, ndim=None, norm=1, axes=None, cuda_stream=None, cl_queu
                        strides=src.strides, tune=tune, **kwargs)
     if backend == Backend.PYOPENCL:
         app.fft(src, dest, queue=cl_queue)
+    # elif backend == Backend.JAX:
+    #     dest = app.jax_fft(src)
     else:
         app.fft(src, dest)
     if return_scale:

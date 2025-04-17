@@ -59,9 +59,9 @@ ffi::Error VkFFTInverseImpl(void *app, ffi::AnyBuffer input,
     return ffi::Error::Success();
 }
 
-// Update the handler registration
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(VkFFTForward, VkFFTForwardImpl,
-                              ffi::Ffi::Bind()                                  
+                              ffi::Ffi::Bind()
                                 .Attr<ffi::Pointer<void>>("app")
                                 .Arg<ffi::AnyBuffer>() // input
                                 .Arg<ffi::AnyBuffer>() // kernel

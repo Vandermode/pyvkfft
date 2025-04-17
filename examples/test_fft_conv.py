@@ -1,7 +1,6 @@
 import sys
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
-os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
 import numpy as np
 from numpy.fft import fftshift
 import matplotlib.pyplot as plt
@@ -12,15 +11,10 @@ import cupy
 from pyvkfft.base import primes, primes_str
 from pyvkfft.fft import rfftn, irfftn, fftn, ifftn
 from pyvkfft.cuda import VkFFTApp, VKFFT_MAX_FFT_DIMENSIONS, pfUINT, pfUINT_array
-from pyvkfft.jax import VkFFTApp as VkFFTApp_jax
 from ctypes import cast
 from numpy.ctypeslib import as_ctypes, as_array
 
-import jax
-import jax.numpy as jnp
-
-
-VkFFTApp = VkFFTApp_jax
+import time
 
 
 def crop_center_2d(img, shape):
@@ -79,12 +73,10 @@ def test_1d():
     gd_np = crop_center_1d(gd_np, size//2)
     
     # move data to GPU
-    # d_gpu = cupy.asarray(input)
-    # k_gpu = cupy.asarray(kernel)
-    d_gpu = jnp.asarray(input)
-    k_gpu = jnp.asarray(kernel)
+    d_gpu = cupy.asarray(input)
+    k_gpu = cupy.asarray(kernel)
     
-    # K_gpu = fftn(k_gpu)
+    K_gpu = fftn(k_gpu)
 
     # vkfft convolution
     # d_gpu = ifftn(fftn(d_gpu) * fftn(k_gpu))
@@ -95,19 +87,13 @@ def test_1d():
                    fft_zeropad_left=fft_zeropad_left,
                    fft_zeropad_right=fft_zeropad_right)
     
-    jax_fft = jax.jit(app_zp.jax_fft, donate_argnums=0)
-    jax_ifft = jax.jit(app_zp.jax_ifft, donate_argnums=0)
-    
-    K_gpu = jax.jit(app.jax_fft)(k_gpu)
-    d_gpu = jax_fft(d_gpu) * K_gpu
-    d_gpu = jax_ifft(d_gpu)
     
     # d_gpu = app_zp.ifft(app_zp.fft(d_gpu) * K_gpu)
     # d_gpu = app.ifft(app.fft(d_gpu) * K_gpu)
     
-    # app_zp.fft(d_gpu)
-    # d_gpu *= K_gpu
-    # app_zp.ifft(d_gpu)
+    app_zp.fft(d_gpu)
+    d_gpu *= K_gpu
+    app_zp.ifft(d_gpu)
     
     # # print(app.is_radix_transform())
     # print(app)
@@ -120,7 +106,7 @@ def test_1d():
     # print(as_array(app.config.contents.fft_zeropad_right))
     # app.fft(d_gpu, convolve_kernel=K_gpu)
     
-    gd0 = d_gpu.get() if isinstance(d_gpu, cupy.ndarray) else d_gpu
+    gd0 = d_gpu.get()
     gd0 = np.fft.fftshift(gd0)
     gd0 = crop_center_1d(gd0, size//2)
     
@@ -142,14 +128,14 @@ def test_1d():
     plt.tight_layout()
     # plt.subplot(144)
     # plt.tight_layout()
+
     plt.show()
 
 
 def test_2d():
     img = ascent()[:256,:256] / 255.
-    # size = 8192
+    size = 8192
     # size = 1024
-    size = 4096
     # size = 1234
     
     performZeropadding = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
@@ -163,7 +149,7 @@ def test_2d():
     fft_zeropad_right = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
     fft_zeropad_right[0] = size // 4 * 3
     fft_zeropad_right[1] = size // 4 * 3
-    
+
     # size = int(2**15)
     print(size)
     img = resize(img, (size, size), anti_aliasing=True)
@@ -188,49 +174,44 @@ def test_2d():
     gd_np = crop_center_2d(gd_np, (size//2, size//2))
     
     # move data to GPU
-    # d_gpu = cupy.asarray(img)
-    # k_gpu = cupy.asarray(kernel)
-    d_gpu = jnp.asarray(img)
-    k_gpu = jnp.asarray(kernel)
-    
-    # K_gpu = fftn(k_gpu)
+    d_gpu = cupy.asarray(img)
+    k_gpu = cupy.asarray(kernel)
     
     # vkfft convolution
     # d_gpu = ifftn(fftn(d_gpu) * fftn(k_gpu))
     
-    app = VkFFTApp(img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, disableReorderFourStep=False)
+    disableReorderFourStep = True
+    
     app_zp = VkFFTApp(
         img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, 
         performZeropadding=performZeropadding,
         fft_zeropad_left=fft_zeropad_left,
         fft_zeropad_right=fft_zeropad_right)
-    app_conv = VkFFTApp(img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=True, convolve_conj=0)
     
-    jax_fft = jax.jit(app_zp.jax_fft, donate_argnums=0)
-    jax_ifft = jax.jit(app_zp.jax_ifft, donate_argnums=0)
-    jax_conv = jax.jit(app_conv.jax_fft, donate_argnums=0)
-        
-    # # print(app.is_radix_transform())
-    # print(app)
-    print('app.nb_axis_upload:', app.nb_axis_upload)
+    app_conv = VkFFTApp(img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=True, convolve_conj=0)
+    app_dr = VkFFTApp(img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, disableReorderFourStep=disableReorderFourStep)
+    
     print('app_conv.nb_axis_upload:', app_conv.nb_axis_upload)
     # print('app.use_bluestein_fft:', app.use_bluestein_fft)
     # print('app.tmp_buffer_nbytes:', app.tmp_buffer_nbytes)
     # print('app.axis_split', app.axis_split)
     
-    # app.fft(d_gpu, convolve_kernel=K_gpu)
-    # app_zp.fft(d_gpu)
-    # d_gpu *= K_gpu
-    # app_zp.ifft(d_gpu)
+    # K_gpu = fftn(k_gpu)
+    K_gpu = app_dr.fft(k_gpu)
+
+    # if app_conv.nb_axis_upload[1] == 2 and not disableReorderFourStep:
+    #     axis_split = app_conv.axis_split
+    #     K_gpu = K_gpu.reshape((*axis_split[1, :2], size))
+    #     K_gpu = K_gpu.transpose((1, 0, 2))
+    #     K_gpu = K_gpu.reshape((size, size))
     
-    K_gpu = jax.jit(app.jax_fft)(k_gpu)
+    # app_conv.fft(d_gpu, convolve_kernel=K_gpu)
     
-    # d_gpu = jax_fft(d_gpu) * K_gpu
-    # d_gpu = jax_ifft(d_gpu)
+    app_dr.fft(d_gpu)
+    d_gpu *= K_gpu
+    app_dr.ifft(d_gpu)
     
-    d_gpu = jax_conv(d_gpu, K_gpu)
-    
-    gd0 = d_gpu.get() if isinstance(d_gpu, cupy.ndarray) else d_gpu 
+    gd0 = d_gpu.get()    
     gd0 = np.fft.fftshift(gd0, axes=(-2, -1))
     gd0 = crop_center_2d(gd0, (size//2, size//2))
     
@@ -256,39 +237,6 @@ def test_2d():
     plt.show()
 
 
-def test_jax():
-    size = 2**12
-    input = np.random.rand(size).astype(np.float32)
-    print(input.shape)        
-    input = input.astype(np.complex64)
-    gd_np = np.fft.fftn(input)
-    
-    # move data to GPU
-    input = jnp.asarray(input)
-    print(input.sharding)
-
-    d_gpu = input
-    # app = VkFFTApp(input.shape, dtype=np.complex64, ndim=1, inplace=False)
-    # d_gpu = app.jax_fft(d_gpu) # test passed!
-
-    app = VkFFTApp(input.shape, dtype=np.complex64, ndim=1, inplace=True)
-    d_gpu = jax.jit(app.jax_fft, donate_argnums=0)(d_gpu)  # This passed the test
-    # d_gpu_ = app.jax_fft(d_gpu) # test failed!
-    # d_gpu = app.jax_fft(d_gpu) # test passed!
-    # app.jax_fft(d_gpu) # test failed!
-    
-    # app = VkFFTApp(input.shape, dtype=np.complex64, ndim=1, inplace=True)
-    # app.fft(d_gpu)  # This passed the test
-    
-    gd0 = d_gpu.get() if isinstance(d_gpu, cupy.ndarray) else d_gpu
-    
-    print(np.abs((gd0 - gd_np) / gd_np).max())
-    print('np.allclose(gd0, gd_np): ',  np.allclose(gd0, gd_np, rtol=1e-6, atol=gd_np.max()*1e-6))
-    # print('np.allclose(gd0, input): ',  np.allclose(gd0, input, rtol=1e-6, atol=gd_np.max()*1e-6))
-    # print('np.allclose(gd_np, input): ',  np.allclose(gd_np, input, rtol=1e-6, atol=gd_np.max()*1e-6))
-
-
 if __name__ == '__main__':
     # test_1d()
     test_2d()
-    # test_jax()

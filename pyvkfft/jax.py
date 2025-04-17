@@ -34,20 +34,20 @@ class VkFFTApp(VkFFTApp_cuda):
             Output array after FFT
         """
         # Define output type
-        output_type = jax.ShapeDtypeStruct(x.shape, x.dtype)        
+        output_type = jax.ShapeDtypeStruct(x.shape, x.dtype)
         app_void_ptr_address = ctypes.cast(self.app, ctypes.c_void_p).value
-                
+
         input_output_aliases = {}
         if self.inplace:
             input_output_aliases[0] = 0
-        
+
         # Prepare kernel if provided
         if kernel is not None:
-            return jax.ffi.ffi_call("vkfft_fft", output_type, input_output_aliases=input_output_aliases)(x, kernel, app=app_void_ptr_address)
+            return jax.ffi.ffi_call("vkfft_fft", output_type, input_output_aliases=input_output_aliases, has_side_effect=True)(x, kernel, app=app_void_ptr_address)
         else:
             # Pass an empty array as kernel
             empty_kernel = jnp.zeros((0,), dtype=self.dtype)
-            return jax.ffi.ffi_call("vkfft_fft", output_type, input_output_aliases=input_output_aliases)(x, empty_kernel, app=app_void_ptr_address)
+            return jax.ffi.ffi_call("vkfft_fft", output_type, input_output_aliases=input_output_aliases, has_side_effect=True)(x, empty_kernel, app=app_void_ptr_address)
     
     def jax_ifft(self, x: jnp.ndarray) -> jnp.ndarray:
         """Apply inverse FFT to input array.
@@ -65,5 +65,5 @@ class VkFFTApp(VkFFTApp_cuda):
         input_output_aliases = {}
         if self.inplace:
             input_output_aliases[0] = 0
-        
-        return jax.ffi.ffi_call("vkfft_ifft", output_type, input_output_aliases=input_output_aliases)(x, app=app_void_ptr_address)
+
+        return jax.ffi.ffi_call("vkfft_ifft", output_type, input_output_aliases=input_output_aliases, has_side_effect=True)(x, app=app_void_ptr_address)

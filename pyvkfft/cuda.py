@@ -222,7 +222,7 @@ try:
         _fields_ = [
             # Pointers to buffers
             ("buffer", ctypes.POINTER(ctypes.c_void_p)),                 # void* const*
-            ("tempBuffer", ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))),  # void**
+            ("tempBuffer", ctypes.POINTER(ctypes.c_void_p)),             # void**
             ("inputBuffer", ctypes.POINTER(ctypes.c_void_p)),            # void* const*
             ("outputBuffer", ctypes.POINTER(ctypes.c_void_p)),           # void* const*
             ("kernel", ctypes.POINTER(ctypes.c_void_p)),                 # void* const*
@@ -481,6 +481,8 @@ class VkFFTApp(VkFFTAppBase):
             self.config.contents.fft_zeropad_left = as_ctypes(self.fft_zeropad_left) if isinstance(self.fft_zeropad_left, np.ndarray) else self.fft_zeropad_left
         if self.fft_zeropad_right is not None:
             self.config.contents.fft_zeropad_right = as_ctypes(self.fft_zeropad_right) if isinstance(self.fft_zeropad_right, np.ndarray) else self.fft_zeropad_right
+            
+        # self.config.contents.printMemoryLayout = pfUINT(1)
         
         self.app = _vkfft_cuda.init_app_from_config(self.config)
 
@@ -622,7 +624,8 @@ class VkFFTApp(VkFFTAppBase):
         """
         use_cupy = False
         if has_cupy:
-            if isinstance(src, (cp.ndarray, jax.numpy.ndarray) ):
+            # if isinstance(src, (cp.ndarray, jax.numpy.ndarray)):
+            if isinstance(src, cp.ndarray):
                 use_cupy = True
         if use_cupy:
             src_ptr = src.__cuda_array_interface__['data'][0]
