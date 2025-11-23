@@ -33,3 +33,4 @@ doc/ybuild
 /build/
 .vscode
 rms_norm.cc
+dcgm

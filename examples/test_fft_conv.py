@@ -3,7 +3,7 @@ matplotlib.use('Qt5Agg')
 
 import sys
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import numpy as np
 from numpy.fft import fftshift
 import matplotlib.pyplot as plt
@@ -137,9 +137,9 @@ def test_1d():
 
 def test_2d():
     img = ascent()[:256,:256] / 255.
-    size = 8192 * 4
+    # size = 8192 * 4
     # size = 10000 * 2
-    # size = 1024
+    size = 10000
     # size = 1234
     
     performZeropadding = np.array([1, 1, 0, 0, 0, 0, 0, 0], dtype=pfUINT)

@@ -18,7 +18,7 @@ from setuptools.command.build_ext import build_ext as build_ext_orig
 from setuptools.command.bdist_egg import bdist_egg
 from setuptools.command.install_lib import install_lib as su_install_lib
 from setuptools.command.sdist import sdist as su_sdist
-from pyvkfft.version import __version__, git_version, vkfft_git_version
+# from pyvkfft.version import __version__, git_version, vkfft_git_version
 
 
 # Maximum number of dimensions VkFFT can handle. VkFFT sets this to 4,

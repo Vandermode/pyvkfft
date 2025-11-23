@@ -1,6 +1,6 @@
 import sys
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
 import numpy as np
 from numpy.fft import fftshift
@@ -233,10 +233,10 @@ def test_1d():
 
 def test_2d():
     img = ascent()[:256,:256] / 255.
-    size = 8192
+    # size = 8192
     # size = 1024
     # size = 4096
-    # size = 1234
+    size = 1234
     
     performZeropadding = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
     # performZeropadding = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
