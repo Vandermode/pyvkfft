@@ -187,7 +187,7 @@ VkFFTConfiguration *make_config(const long *size, const size_t fftdim,
         CUresult res = cuCtxGetDevice(dev);
         if (res != CUDA_SUCCESS)
         {
-            cout << "Could not get the current device. Was a CUDA context created ?" << endl;
+            cout << "Could not get the current device. Was a CUDA context created ? Error code: " << res << endl;
             return 0;
         }
     }

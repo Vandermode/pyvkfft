@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use('Qt5Agg')
+
 import sys
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
@@ -73,8 +76,8 @@ def test_1d():
     gd_np = crop_center_1d(gd_np, size//2)
     
     # move data to GPU
-    d_gpu = cupy.asarray(input)
-    k_gpu = cupy.asarray(kernel)
+    d_gpu = cupy.array(input)
+    k_gpu = cupy.array(kernel)
     
     K_gpu = fftn(k_gpu)
 
@@ -134,11 +137,12 @@ def test_1d():
 
 def test_2d():
     img = ascent()[:256,:256] / 255.
-    size = 8192
+    size = 8192 * 4
+    # size = 10000 * 2
     # size = 1024
     # size = 1234
     
-    performZeropadding = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
+    performZeropadding = np.array([1, 1, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
     # performZeropadding = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
     print(performZeropadding)
     # performZeropadding = as_ctypes(performZeropadding)
@@ -149,6 +153,8 @@ def test_2d():
     fft_zeropad_right = np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=pfUINT)
     fft_zeropad_right[0] = size // 4 * 3
     fft_zeropad_right[1] = size // 4 * 3
+    
+    print(fft_zeropad_left, fft_zeropad_right)
 
     # size = int(2**15)
     print(size)
@@ -165,7 +171,8 @@ def test_2d():
     kernel /= kernel.sum()
 
     # Numpy convolution
-    img, kernel = img.astype(np.complex64), kernel.astype(np.complex64)
+    dtype = np.complex128
+    img, kernel = img.astype(dtype), kernel.astype(dtype)
     
     K_np = np.fft.fftn(kernel)
     gd_np = np.fft.ifftn(np.fft.fftn(img) * K_np, img.shape)
@@ -174,22 +181,29 @@ def test_2d():
     gd_np = crop_center_2d(gd_np, (size//2, size//2))
     
     # move data to GPU
-    d_gpu = cupy.asarray(img)
-    k_gpu = cupy.asarray(kernel)
+    d_gpu = cupy.array(img)
+    k_gpu = cupy.array(kernel)
     
     # vkfft convolution
     # d_gpu = ifftn(fftn(d_gpu) * fftn(k_gpu))
     
     disableReorderFourStep = True
     
-    app_zp = VkFFTApp(
-        img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, 
+    # app_zp = VkFFTApp(
+    #     img.shape, dtype=dtype, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, 
+    #     performZeropadding=performZeropadding,
+    #     fft_zeropad_left=fft_zeropad_left,
+    #     fft_zeropad_right=fft_zeropad_right)
+    
+    # app_conv = VkFFTApp(img.shape, dtype=dtype, ndim=2, inplace=True, r2c=False, convolve=True, convolve_conj=0)
+    
+    app_conv = VkFFTApp(
+        img.shape, dtype=dtype, ndim=2, inplace=True, r2c=False, convolve=True, convolve_conj=0, 
         performZeropadding=performZeropadding,
         fft_zeropad_left=fft_zeropad_left,
         fft_zeropad_right=fft_zeropad_right)
-    
-    app_conv = VkFFTApp(img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=True, convolve_conj=0)
-    app_dr = VkFFTApp(img.shape, dtype=np.complex64, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, disableReorderFourStep=disableReorderFourStep)
+        
+    app_dr = VkFFTApp(img.shape, dtype=dtype, ndim=2, inplace=True, r2c=False, convolve=False, convolve_conj=0, disableReorderFourStep=disableReorderFourStep)
     
     print('app_conv.nb_axis_upload:', app_conv.nb_axis_upload)
     # print('app.use_bluestein_fft:', app.use_bluestein_fft)
@@ -201,15 +215,23 @@ def test_2d():
 
     # if app_conv.nb_axis_upload[1] == 2 and not disableReorderFourStep:
     #     axis_split = app_conv.axis_split
-    #     K_gpu = K_gpu.reshape((*axis_split[1, :2], size))
-    #     K_gpu = K_gpu.transpose((1, 0, 2))
+    #     if app_conv.nb_axis_upload[0] == 2:
+    #         K_gpu = K_gpu.reshape((*axis_split[1, :2], *axis_split[0, :2]))
+    #         K_gpu = K_gpu.transpose((1, 0, 3, 2))            
+    #     else:
+    #         K_gpu = K_gpu.reshape((*axis_split[1, :2], size))
+    #         K_gpu = K_gpu.transpose((1, 0, 2))
     #     K_gpu = K_gpu.reshape((size, size))
+
     
-    # app_conv.fft(d_gpu, convolve_kernel=K_gpu)
+    start_time = time.time()
+    app_conv.fft(d_gpu, convolve_kernel=K_gpu)
+    cupy.cuda.Stream.null.synchronize()
+    print("vkFFT convolution time: %f s" % (time.time() - start_time))
     
-    app_dr.fft(d_gpu)
-    d_gpu *= K_gpu
-    app_dr.ifft(d_gpu)
+    # app_dr.fft(d_gpu)
+    # d_gpu *= K_gpu
+    # app_dr.ifft(d_gpu)
     
     gd0 = d_gpu.get()    
     gd0 = np.fft.fftshift(gd0, axes=(-2, -1))
@@ -218,23 +240,23 @@ def test_2d():
     print(np.abs(gd0 - gd_np).max())
     print('np.allclose(gd0, gd_np): ',  np.allclose(gd0, gd_np, rtol=1e-6, atol=gd_np.max()*1e-6))
 
-    plt.figure(figsize=(12,4))
-    plt.subplot(141)
-    plt.imshow(img.real, cmap='gray')
-    plt.title('(inner) padded input')
-    plt.subplot(142)
-    plt.imshow(np.fft.fftshift(kernel).real, cmap='gray')
-    plt.title('kernel')
-    plt.subplot(143)
-    plt.imshow(gd_np.real, cmap='gray', vmin=0, vmax=1)
-    plt.title('numpy FFTs results')
-    plt.tight_layout()    
-    plt.subplot(144)
-    plt.imshow(gd0.real, cmap='gray', vmin=0, vmax=1)
-    plt.title('vKFFT results')
-    plt.tight_layout()
+    # plt.figure(figsize=(12,4))
+    # plt.subplot(141)
+    # plt.imshow(img.real, cmap='gray')
+    # plt.title('(inner) padded input')
+    # plt.subplot(142)
+    # plt.imshow(np.fft.fftshift(kernel).real, cmap='gray')
+    # plt.title('kernel')
+    # plt.subplot(143)
+    # plt.imshow(gd_np.real, cmap='gray', vmin=0, vmax=1)
+    # plt.title('numpy FFTs results')
+    # plt.tight_layout()    
+    # plt.subplot(144)
+    # plt.imshow(gd0.real, cmap='gray', vmin=0, vmax=1)
+    # plt.title('vKFFT results')
+    # plt.tight_layout()
 
-    plt.show()
+    # plt.show()
 
 
 if __name__ == '__main__':

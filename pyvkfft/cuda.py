@@ -18,7 +18,7 @@ except ImportError:
     has_pycuda = False
 try:
     import cupy as cp
-    import jax
+    # import jax
 
     has_cupy = True
 except ImportError:

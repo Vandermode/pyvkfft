@@ -12,7 +12,7 @@ dependencies = [
     "numpy",
     "psutil"
 ]
-license = "MIT"
+license = {text = "MIT"}
 authors = [
     {name = "Vincent Favre-Nicolin"},
     {name = "Kaixuan Wei"}
@@ -24,10 +24,8 @@ pyvkfft-test-suite = "pyvkfft.scripts.pyvkfft_test_suite:main"
 pyvkfft-benchmark = "pyvkfft.scripts.pyvkfft_benchmark:main"
 pyvkfft-info = "pyvkfft.scripts.pyvkfft_info:main"
 
-
 [project.urls]
 Repository = "https://github.com/vincefn/pyvkfft"
-
 
 [project.optional-dependencies]
 cuda = ["pycuda"]
