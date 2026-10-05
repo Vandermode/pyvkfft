@@ -1,0 +1,9 @@
+{
+  "implementation": "native",
+  "prune": true,
+  "transfer": "materialized",
+  "groupedBatch": [
+    0,
+    32
+  ]
+}

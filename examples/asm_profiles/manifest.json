@@ -1,0 +1,85 @@
+{
+  "scope": {
+    "gpu": "NVIDIA A100 80GB PCIe",
+    "compact_shape": [
+      4096,
+      16384
+    ],
+    "padded_shape": [
+      8192,
+      32768
+    ],
+    "dtype": "complex64",
+    "cuda_toolkit": "12.9",
+    "vkfft_runtime": "1.3.5",
+    "cupy": "14.0.1"
+  },
+  "build": {
+    "command": [
+      "g++",
+      "-std=c++17",
+      "-shared",
+      "-fPIC",
+      "-O2",
+      "-DVKFFT_MAX_FFT_DIMENSIONS=8",
+      "-I/home/weik/anaconda3/envs/jax/targets/x86_64-linux/include",
+      "-I/home/weik/code/FFT/asm-results/kernel-research/build-07/vkFFT",
+      "/home/weik/code/FFT/pyvkfft/src/vkfft_asm.cpp",
+      "-L/home/weik/anaconda3/envs/jax/targets/x86_64-linux/lib",
+      "-Wl,-rpath,/home/weik/anaconda3/envs/jax/targets/x86_64-linux/lib",
+      "-l:libnvrtc.so.12",
+      "-lcuda",
+      "-lcudart",
+      "-o",
+      "/home/weik/code/FFT/asm-results/kernel-research/build-07/libvkfft_asm.so"
+    ],
+    "source_sha256": "ba71c027247ddd448dbef4d5a9c7718d19b61fea1e58168c6f4eb0b9b9ef03b4",
+    "library_sha256": "84d29e76e70bdcae1f7fd0115cd3ae9911e2dd510c93eede1335ad8fb841de81",
+    "git_revision": "c9fafa04733e559c292d1785e59fb0f5d71e4ae0",
+    "vkfft_revision": "635b1fbc8a4b43476f4420af0a507fa93aa8af78"
+  },
+  "selection": "groupedBatch [0,32], explicit opt-in only; 3 independent processes, 4 alternating 5-second blocks each; at least 3% gain with 95% interval excluding no improvement",
+  "profiles": [
+    "a100-4096x16384-static.json",
+    "a100-4096x16384-dynamic.json"
+  ],
+  "additional_scopes": [
+    {
+      "compact_shape": [
+        32768,
+        8192
+      ],
+      "padded_shape": [
+        65536,
+        16384
+      ],
+      "selection": "column-first, including compact input and output transposes",
+      "gpu": "NVIDIA A100 80GB PCIe",
+      "native_to_native_evidence": "asm-results/baselines/orientation-tall-summary.json",
+      "profiles": [
+        "a100-32768x8192-static-column.json",
+        "a100-32768x8192-dynamic-column.json"
+      ]
+    },
+    {
+      "compact_shape": [
+        4096,
+        16384
+      ],
+      "mode": "dynamic_z",
+      "bandlimit": "none",
+      "selection": "explicit distance-only optimization with fixed wavelength; 2 GiB extra FP64 phase table",
+      "gpu": "NVIDIA A100 80GB PCIe",
+      "speedup": 1.051197,
+      "ci95": [
+        1.049435,
+        1.052963
+      ],
+      "native_to_native_evidence": "asm-results/baselines/final-public-cache-summary.json",
+      "phase_library_sha256": "20fb319abba78e0a0c0d91d1b50c572f462e1a76b6521ab031f75b9fe83fc6a0",
+      "profiles": [
+        "a100-4096x16384-dynamic-cached-phase.json"
+      ]
+    }
+  ]
+}

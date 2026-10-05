@@ -1,0 +1,84 @@
+--- a/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
++++ b/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
+@@ -200,6 +200,9 @@
+ static inline void appendGlobalToRegisters(VkFFTSpecializationConstantsLayout* sc, PfContainer* out, PfContainer* bufferName, PfContainer* inoutID)
+ {
+ 	if (sc->res != VKFFT_SUCCESS) return;
++#ifdef VKFFT_ASM_HOOKS
++	if (asm_read_hook(sc, out, bufferName, inoutID)) return;
++#endif
+ 	if (((!(strcmp(bufferName->name, sc->inputsStruct.name))) && (sc->inputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->outputsStruct.name))) && (sc->outputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->kernelStruct.name))) && (sc->kernelSeparateComplexComponents))) {
+--- a/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
++++ b/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
+@@ -479,6 +479,9 @@
+ static inline void appendRegistersToGlobal(VkFFTSpecializationConstantsLayout* sc, PfContainer* bufferName, PfContainer* inoutID, PfContainer* in)
+ {
+ 	if (sc->res != VKFFT_SUCCESS) return;
++#ifdef VKFFT_ASM_HOOKS
++	if (asm_write_hook(sc, bufferName, inoutID, in)) return;
++#endif
+ 	if (((!(strcmp(bufferName->name, sc->inputsStruct.name))) && (sc->inputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->outputsStruct.name))) && (sc->outputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->kernelStruct.name))) && (sc->kernelSeparateComplexComponents))) {
+--- a/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
++++ b/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
+@@ -695,6 +695,9 @@
+ static inline void appendGlobalToShared(VkFFTSpecializationConstantsLayout* sc, PfContainer* sdataID, PfContainer* bufferName, PfContainer* inoutID)
+ {
+ 	if (sc->res != VKFFT_SUCCESS) return;
++#ifdef VKFFT_ASM_HOOKS
++	if (asm_read_hook(sc, &sc->temp, bufferName, inoutID)) { appendRegistersToShared(sc, sdataID, &sc->temp); return; }
++#endif
+ 	if (((!(strcmp(bufferName->name, sc->inputsStruct.name))) && (sc->inputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->outputsStruct.name))) && (sc->outputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->kernelStruct.name))) && (sc->kernelSeparateComplexComponents))) {
+--- a/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
++++ b/vkFFT/vkFFT/vkFFT_CodeGen/vkFFT_KernelsLevel0/vkFFT_MemoryManagement/vkFFT_MemoryTransfers/vkFFT_Transfers.h
+@@ -916,6 +916,9 @@
+ static inline void appendSharedToGlobal(VkFFTSpecializationConstantsLayout* sc, PfContainer* bufferName, PfContainer* inoutID, PfContainer* sdataID)
+ {
+ 	if (sc->res != VKFFT_SUCCESS) return;
++#ifdef VKFFT_ASM_HOOKS
++	if (asm_is_output(sc)) { appendSharedToRegisters(sc, &sc->temp, sdataID); appendRegistersToGlobal(sc, bufferName, inoutID, &sc->temp); return; }
++#endif
+ 	if (((!(strcmp(bufferName->name, sc->inputsStruct.name))) && (sc->inputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->outputsStruct.name))) && (sc->outputBufferSeparateComplexComponents)) ||
+ 	 ((!(strcmp(bufferName->name, sc->kernelStruct.name))) && (sc->kernelSeparateComplexComponents))) {
+--- a/vkFFT/vkFFT/vkFFT_PlanManagement/vkFFT_API_handles/vkFFT_CompileKernel.h
++++ b/vkFFT/vkFFT/vkFFT_PlanManagement/vkFFT_API_handles/vkFFT_CompileKernel.h
+@@ -35,6 +35,9 @@
+ #elif(VKFFT_BACKEND==4)
+ 	ze_result_t res = ZE_RESULT_SUCCESS;
+ #elif(VKFFT_BACKEND==5)
++#endif
++#ifdef VKFFT_ASM_HOOKS
++	if (!asm_compile_hook(app, axis)) return VKFFT_ERROR_FAILED_TO_COMPILE_PROGRAM;
+ #endif
+ 	char* code0 = axis->specializationConstants.code0;
+ #if(VKFFT_BACKEND==0)
+--- a/vkFFT/vkFFT/vkFFT_PlanManagement/vkFFT_API_handles/vkFFT_DispatchPlan.h
++++ b/vkFFT/vkFFT/vkFFT_PlanManagement/vkFFT_API_handles/vkFFT_DispatchPlan.h
+@@ -25,6 +25,9 @@
+ 
+ static inline VkFFTResult VkFFT_DispatchPlan(VkFFTApplication* app, VkFFTAxis* axis, pfUINT* dispatchBlock) {
+ 	VkFFTResult resFFT = VKFFT_SUCCESS;
++#ifdef VKFFT_ASM_HOOKS
++	asm_dispatch_dimensions(axis, dispatchBlock);
++#endif
+ 	if (axis->specializationConstants.swapComputeWorkGroupID == 1) {
+ 		pfUINT temp = dispatchBlock[0];
+ 		dispatchBlock[0] = dispatchBlock[1];
+--- a/vkFFT/vkFFT/vkFFT_PlanManagement/vkFFT_API_handles/vkFFT_DispatchPlan.h
++++ b/vkFFT/vkFFT/vkFFT_PlanManagement/vkFFT_API_handles/vkFFT_DispatchPlan.h
+@@ -264,6 +264,9 @@
+ 					args[args_id] = &axis->pushConstants.data;
+ 					args_id++;
+ 				}
++#ifdef VKFFT_ASM_HOOKS
++				args[args_id++] = asm_launch_arguments();
++#endif
+ 				/*if (axis->updatePushConstants) {
+ 					axis->updatePushConstants = 0;
+ 					if (axis->pushConstants.structSize > 0) {

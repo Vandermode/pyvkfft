@@ -1,0 +1,6 @@
+{
+  "implementation": "native",
+  "prune": true,
+  "transfer": "cached_phase_symmetric",
+  "groupedBatch": [0, 32]
+}

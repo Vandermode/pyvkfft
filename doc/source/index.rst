@@ -144,6 +144,10 @@ Indices and tables
    changelog
    features
    performance
+   asm-optimization
+   jax-asm
+   distributed-asm
+   issue205-investigation
    examples/index
    api/index
    scripts/index
@@ -151,4 +155,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

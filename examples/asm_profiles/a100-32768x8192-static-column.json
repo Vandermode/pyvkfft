@@ -1,0 +1,6 @@
+{
+  "implementation": "native",
+  "prune": true,
+  "axis_order": "column",
+  "transfer": "materialized"
+}

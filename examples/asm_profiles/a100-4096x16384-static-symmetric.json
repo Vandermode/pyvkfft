@@ -1,0 +1,6 @@
+{
+  "implementation": "native",
+  "prune": true,
+  "transfer": "symmetric",
+  "groupedBatch": [0, 32]
+}

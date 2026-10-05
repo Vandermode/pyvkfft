@@ -1,0 +1,67 @@
+{
+  "scope": "Explicit A100 80GB PCIe choices for exact complex64 analytic ASM. No automatic defaults. Caller compact input/output included in memory figures.",
+  "library": {
+    "environment": "PYVKFFT_ASM_SYMMETRIC_LIBRARY",
+    "abi": 1,
+    "layout": 1,
+    "sha256": "ff0798479423139cee9382466be1808e5b5f3324be800a5e4b222f0f24245d71"
+  },
+  "profiles": [
+    {
+      "file": "a100-4096x16384-static-symmetric.json",
+      "mode": "static",
+      "preparation": "prepare_asm_transfer(z=..., wavelength=...)",
+      "shape": [
+        4096,
+        16384
+      ],
+      "full_to_symmetric_speedup": 1.0050692862571438,
+      "ci95": [
+        0.9986075167490969,
+        1.0115728684538345
+      ],
+      "full_to_symmetric_peak_array_gib": [
+        5,
+        3.501099
+      ],
+      "selection": "Memory improvement; no statistically established speedup"
+    },
+    {
+      "file": "a100-32768x8192-static-symmetric-column.json",
+      "mode": "static",
+      "preparation": "prepare_asm_transfer(z=..., wavelength=...)",
+      "shape": [
+        32768,
+        8192
+      ],
+      "full_to_symmetric_speedup": 1.0312336411317202,
+      "ci95": [
+        1.0304384363918713,
+        1.03202945954295
+      ],
+      "full_to_symmetric_peak_array_gib": [
+        22,
+        16.002198
+      ],
+      "selection": "Memory improvement and speedup above3% with95% CI"
+    },
+    {
+      "file": "a100-4096x16384-dynamic-cached-phase-symmetric.json",
+      "mode": "dynamic",
+      "bandlimit": "none",
+      "shape": [
+        4096,
+        16384
+      ],
+      "peak_array_gib": 3.501099,
+      "selection": "Explicit intermediate memory/speed tradeoff for fixed wavelength. Full cache is faster and uses5GiB; fused dynamic uses3GiB. Changing wavelength includes table rebuild; fused is faster in that workload."
+    }
+  ],
+  "streamed": {
+    "class": "pyvkfft.asm_streamed.StreamedASMPlan",
+    "environment": "PYVKFFT_STREAMED_LIBRARY",
+    "primary_tile_columns": 256,
+    "tall_tile_columns": 32,
+    "selection": "Explicit capacity choice; slower propagation, no automatic promotion"
+  }
+}

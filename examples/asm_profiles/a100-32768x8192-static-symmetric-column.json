@@ -1,0 +1,6 @@
+{
+  "implementation": "native",
+  "prune": true,
+  "transfer": "symmetric",
+  "axis_order": "column"
+}
