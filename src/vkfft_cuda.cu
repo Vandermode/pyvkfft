@@ -10,6 +10,7 @@
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <limits>
 using namespace std;
 #include "vkFFT.h"
 typedef float2 Complex;
@@ -98,6 +99,18 @@ VkFFTConfiguration *make_config(const long *size, const size_t fftdim,
                                 const int coordinateFeatures,
                                 const int singleKernelMultipleBatches)
 {
+    // Validate sizes before allocating configuration-owned objects. Products
+    // exceeding 2^31 elements are valid for large complex64 CUDA transforms.
+    uint64_t element_count = 1;
+    for (int i = 0; i < VKFFT_MAX_FFT_DIMENSIONS; i++) {
+        if (size[i] <= 0 || static_cast<uint64_t>(size[i]) >
+                std::numeric_limits<uint64_t>::max() / element_count)
+            return nullptr;
+        element_count *= static_cast<uint64_t>(size[i]);
+    }
+    if (precision == 0 || precision > std::numeric_limits<uint64_t>::max() / 2 ||
+            element_count > std::numeric_limits<uint64_t>::max() / (2 * precision))
+        return nullptr;
     VkFFTConfiguration *config = new VkFFTConfiguration({});
     config->FFTdim = fftdim;
     for (int i = 0; i < VKFFT_MAX_FFT_DIMENSIONS; i++)
@@ -199,9 +212,7 @@ VkFFTConfiguration *make_config(const long *size, const size_t fftdim,
     uint64_t *psize = new uint64_t;
     uint64_t *psizein = psize;
 
-    int s = size[0];
-    for (int i = 1; i < VKFFT_MAX_FFT_DIMENSIONS; i++)
-        s *= size[i];
+    const uint64_t s = element_count;
 
     // forceCallbackVersionRealTransforms is normally automatically set by VkFFT
     // for odd-length R2C/DCT/DST - this can be used to force it for even lengths

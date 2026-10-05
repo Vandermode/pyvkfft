@@ -460,8 +460,8 @@ class VkFFTApp(VkFFTAppBase):
         self.stream = stream
 
         self.config = self.make_config()
-        if self.config is None:
-            raise RuntimeError("Error creating VkFFTConfiguration. Was the CUDA context properly initialised ?")
+        if not self.config:
+            raise RuntimeError("Error creating VkFFTConfiguration. Check dimensions, byte count, and CUDA context.")
 
         # res = ctypes.c_int(0)
         # # Size of tmp buffer allocated by VkFFT - if any
@@ -514,8 +514,11 @@ class VkFFTApp(VkFFTAppBase):
 
     @property
     def tmp_buffer_nbytes(self):
-        if bool(self.config.contents.allocateTempBuffer):
-            res = np.uint64(self.config.contents.tempBufferSize[0])
+        # VkFFT finalizes scratch allocation in its internal configuration.
+        # The input configuration can still report zero after initialization.
+        config = self.app.contents.configuration
+        if bool(config.allocateTempBuffer):
+            res = np.uint64(config.tempBufferSize[0])
         else:
             res = 0
         return res
@@ -541,9 +544,9 @@ class VkFFTApp(VkFFTAppBase):
         """ Takes care of deleting allocated memory in the underlying
         VkFFTApplication and VkFFTConfiguration.
         """
-        if self.app is not None:
+        if self.app:
             _vkfft_cuda.free_app(self.app)
-        if self.config is not None:
+        if self.config:
             _vkfft_cuda.free_config(self.config)
 
     def make_config(self):
