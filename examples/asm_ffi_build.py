@@ -7,6 +7,7 @@ The output is isolated: the installed FFT extension and VkFFT submodule are
 unchanged. The same FFI can be used by JAX environments with a compatible ABI.
 """
 import argparse
+import ctypes
 import hashlib
 import json
 from pathlib import Path
@@ -45,7 +46,8 @@ def build(output, cuda, jax_include=None):
     subprocess.run(command, check=True)
     files = list(sources.iterdir()) + [jax_include / 'xla/ffi/api/ffi.h',
                                      jax_include / 'xla/ffi/api/c_api.h']
-    manifest = dict(abi=3, command=command, jax_version=jax.__version__,
+    abi = ctypes.CDLL(str(library)).asm_ffi_abi_version()
+    manifest = dict(abi=abi, command=command, jax_version=jax.__version__,
                     jaxlib_version=jaxlib.__version__, core=core_manifest,
                     source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest()
                                    for p in files},

@@ -63,6 +63,22 @@ scale are fixed, stop-gradient parameters; field JVPs, reverse mode and higher
 field derivatives are supported. Use complex64 H when differentiating transfer
 parameters. This API requires FFI ABI 3; rebuild older libraries.
 
+``convolve_window(field, H, input_offset=(0, 0), output_shape=None,
+output_offset=(0, 0), grouped_batch=0)`` (FFI ABI 4) takes the FFT canvas from
+``H.shape[-2:]`` in natural FFT order. The field is zero-embedded at
+``input_offset``, and the ``output_shape`` window at ``output_offset`` is returned;
+the default output is the field shape at the origin. A canvas equal to the field
+with zero offsets is a periodic convolution. ``(2*height, 2*width)`` with
+offsets ``(height//2, width//2)`` is bit-identical to :func:`convolve`. Larger
+asymmetric canvases with off-centre crops, such as NeuralDOE's 3n BPM output
+propagation, are supported too. The forward row transforms skip rows outside the
+input window, and the inverse row transforms skip rows outside the output window.
+Field gradients run the same engine with the two windows exchanged and the
+frequencies reversed (JAX's bilinear transpose). Transfer gradients use JAX FFTs.
+Canvas axes must factor into VkFFT radices with at most two uploads per axis.
+The Python module still accepts ABI 3 libraries for the other operations; those
+use target ``pyvkfft_asm_v3``, ABI 4 uses ``pyvkfft_asm_v4``.
+
 ``asm(field, z, wavelength, pixel_pitch=(dy, dx), bandlimit='none',
 grouped_batch=0)`` evaluates the analytic transfer in the native kernels.
 It discards evanescent modes and optionally applies a ``'rectangular'``

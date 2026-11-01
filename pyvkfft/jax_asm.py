@@ -3,7 +3,10 @@
 ``asm`` evaluates an analytic transfer inside the FFT kernels. ``convolve``
 accepts a general transfer in natural FFT order (or an explicitly even quadrant).
 Both zero-pad each spatial dimension to twice its size, then crop back at
-``(height // 2, width // 2)``. Inputs are immutable complex64 JAX arrays.
+``(height // 2, width // 2)``. ``convolve_window`` (FFI ABI 4) takes an explicit
+FFT canvas, input placement and output window instead, including periodic
+(canvas equal to the field) and asymmetric padded geometries. Inputs are
+immutable complex64 JAX arrays.
 
 JIT, sequential vmap/broadcast batches, JVPs and reverse-mode gradients are
 supported. Field gradients use the same fused native engine. General transfer
@@ -32,7 +35,8 @@ from jax._src import dispatch
 import numpy as np
 
 
-_TARGET = 'pyvkfft_asm_v3'
+_TARGET = 'pyvkfft_asm_v3'  # replaced by pyvkfft_asm_v4 when an ABI 4 library is loaded
+_SUPPORTED_ABI = (3, 4)
 _registration_lock = threading.Lock()
 
 
@@ -85,12 +89,17 @@ def _library():
                            'PYVKFFT_ASM_FFI_LIBRARY to libvkfft_asm_ffi.so')
     library = ctypes.CDLL(str(path.resolve()))
     library.asm_ffi_abi_version.restype = ctypes.c_int
-    if library.asm_ffi_abi_version() != 3:
+    abi = library.asm_ffi_abi_version()
+    if abi not in _SUPPORTED_ABI:
         raise RuntimeError('Unsupported ASM FFI ABI')
     library.asm_ffi_cache_info.restype = ctypes.c_char_p
     library.asm_ffi_clear_cache.argtypes = []
     library.asm_ffi_clear_cache.restype = None
-    jax.ffi.register_ffi_target(_TARGET, jax.ffi.pycapsule(library.PyVkFFTASM),
+    # ABI 4 adds explicit canvas/window attributes; the target name changes with
+    # the handler signature, so an old executable can never bind the new library.
+    library._abi = abi
+    library._target = f'pyvkfft_asm_v{abi}'
+    jax.ffi.register_ffi_target(library._target, jax.ffi.pycapsule(library.PyVkFFTASM),
                                 platform='CUDA', api_version=1)
     return library
 
@@ -170,12 +179,26 @@ def _options(pixel_pitch, bandlimit, grouped_batch):
                 bandlimit=int(bandlimit == 'rectangular'), grouped=int(grouped_batch))
 
 
-def _ffi_call(field, transfer, z, wavelength, **attributes):
-    output = jax.ShapeDtypeStruct(field.shape, field.dtype)
-    work = jax.ShapeDtypeStruct(tuple(2*n for n in field.shape), field.dtype)
+def _classic_geometry(shape):
+    h, w = shape
+    return dict(canvas=(2*h, 2*w), input_offset=(h//2, w//2), output_shape=(h, w), output_offset=(h//2, w//2))
+
+
+def _ffi_call(field, transfer, z, wavelength, *, geometry=None, **attributes):
+    library = _register()
+    if geometry is None:
+        geometry = _classic_geometry(field.shape)
+    elif library._abi < 4:
+        raise RuntimeError('Explicit FFT canvas/window geometry requires ASM FFI ABI 4; rebuild '
+                           'examples/asm_ffi_build.py')
+    output = jax.ShapeDtypeStruct(tuple(geometry['output_shape']), field.dtype)
+    work = jax.ShapeDtypeStruct(tuple(geometry['canvas']), field.dtype)
+    if library._abi >= 4:
+        (ch, cw), (iy, ix), (oy, ox) = geometry['canvas'], geometry['input_offset'], geometry['output_offset']
+        attributes.update(canvas_h=ch, canvas_w=cw, input_y=iy, input_x=ix, output_y=oy, output_x=ox)
     attributes = {k: np.float64(v) if k in ('dy', 'dx') else np.int64(v)
                   for k, v in attributes.items()}
-    return jax.ffi.ffi_call(_TARGET, (output, work), vmap_method='sequential')(
+    return jax.ffi.ffi_call(library._target, (output, work), vmap_method='sequential')(
         field, transfer, z, wavelength, **attributes)[0]
 
 
@@ -320,6 +343,126 @@ def convolve(field, transfer, *, transfer_layout='fft', grouped_batch=0):
     options = _options((1., 1.), 'none', grouped_batch)
     function = partial(_convolve_p.bind, layout=transfer_layout, transpose=False,
                        grouped=options['grouped'])
+    return _map_broadcast(function, (field, transfer), (2, 2))
+
+
+def _embed(value, canvas, offset):
+    (ch, cw), (y, x), (h, w) = canvas, offset, value.shape[-2:]
+    return jnp.pad(value, [(0, 0)]*(value.ndim-2) + [(y, ch-y-h), (x, cw-x-w)])
+
+
+def _window_geometry(field_shape, canvas, input_offset, output_shape, output_offset):
+    h, w = field_shape
+    canvas = tuple(int(v) for v in canvas)
+    input_offset = tuple(int(v) for v in input_offset)
+    output_shape = tuple(int(v) for v in (field_shape if output_shape is None else output_shape))
+    output_offset = tuple(int(v) for v in output_offset)
+    if len(canvas) != 2 or len(input_offset) != 2 or len(output_shape) != 2 or len(output_offset) != 2:
+        raise ValueError('canvas, offsets and output_shape must be two-dimensional')
+    if min(canvas) < 1 or min(output_shape) < 1 or min(input_offset) < 0 or min(output_offset) < 0:
+        raise ValueError('canvas and windows must be nonempty with nonnegative offsets')
+    for (start, size), extent in zip(zip(input_offset + output_offset, (h, w) + output_shape), canvas*2):
+        if start + size > extent:
+            raise ValueError('input and output windows must lie inside the FFT canvas')
+    return dict(canvas=canvas, input_offset=input_offset, output_shape=output_shape, output_offset=output_offset)
+
+
+_window_p = core.Primitive('pyvkfft_asm_window')
+_window_p.def_impl(partial(dispatch.apply_primitive, _window_p))
+
+
+def _window_abstract(field, transfer, *, canvas, input_offset, output_shape, output_offset, transpose, grouped):
+    _check_field(field)
+    if field.ndim != 2 or transfer.ndim != 2:
+        raise ValueError('Internal windowed convolution operands must be two-dimensional')
+    _window_geometry(field.shape, canvas, input_offset, output_shape, output_offset)
+    if transfer.dtype != field.dtype or tuple(transfer.shape) != tuple(canvas):
+        raise ValueError(f'transfer must be complex64 with the canvas shape {tuple(canvas)}')
+    return field.update(shape=tuple(output_shape))
+
+
+_window_p.def_abstract_eval(_window_abstract)
+
+
+def _window_lower(ctx, field, transfer, *, canvas, input_offset, output_shape, output_offset, transpose, grouped):
+    _register()
+    geometry = dict(canvas=canvas, input_offset=input_offset, output_shape=output_shape, output_offset=output_offset)
+
+    def impl(x, h):
+        return _ffi_call(x, h, jnp.zeros((), jnp.float32), jnp.ones((), jnp.float32), geometry=geometry,
+                         dy=1., dx=1., bandlimit=0, grouped=grouped, transfer_mode=1,
+                         dz_order=0, dw_order=0, transpose=int(transpose))
+
+    return mlir.lower_fun(impl, multiple_results=False)(ctx, field, transfer)
+
+
+mlir.register_lowering(_window_p, _window_lower, platform='cuda')
+
+
+def _window_jvp(primals, tangents, **params):
+    field, transfer = primals
+    dfield, dtransfer = tangents
+    result = _window_p.bind(*primals, **params)
+    terms = []
+    if not isinstance(dfield, ad.Zero):
+        terms.append(_window_p.bind(dfield, transfer, **params))
+    if not isinstance(dtransfer, ad.Zero):
+        terms.append(_window_p.bind(field, dtransfer, **params))
+    tangent = sum(terms[1:], terms[0]) if terms else ad.Zero.from_primal_value(result)
+    return result, tangent
+
+
+def _window_transpose(cotangent, field, transfer, *, canvas, input_offset, output_shape, output_offset,
+                      transpose, grouped):
+    field_missing, transfer_missing = ad.is_undefined_primal(field), ad.is_undefined_primal(transfer)
+    if isinstance(cotangent, ad.Zero):
+        return (ad.Zero(field.aval) if field_missing else None,
+                ad.Zero(transfer.aval) if transfer_missing else None)
+    field_shape = tuple(field.aval.shape if field_missing else field.shape)
+    if field_missing and not transfer_missing:
+        # A = C_out F^-1 D_H F E_in, so A^T = C_in F^-1 D_rev(H) F E_out: the same
+        # engine with input and output windows exchanged and frequencies reversed.
+        return _window_p.bind(cotangent, transfer, canvas=canvas, input_offset=output_offset,
+                              output_shape=field_shape, output_offset=input_offset,
+                              transpose=not transpose, grouped=grouped), None
+    if transfer_missing and not field_missing:
+        # dH = FFT(E_in x) * IFFT(E_out g); JAX's bilinear cotangent, no conjugation.
+        embedded = _embed(cotangent, canvas, output_offset)
+        inverse = jnp.conj(jnp.fft.fft2(jnp.conj(embedded))) * np.float32(1/math.prod(canvas))
+        gradient = jnp.fft.fft2(_embed(field, canvas, input_offset)) * inverse
+        if transpose:
+            gradient = _reverse_frequencies(gradient)
+        return None, gradient.astype(field.dtype)
+    raise TypeError('Windowed convolution transpose requires exactly one linear argument')
+
+
+ad.primitive_jvps[_window_p] = _window_jvp
+ad.primitive_transposes[_window_p] = _window_transpose
+batching.primitive_batchers[_window_p] = partial(_batch, _window_p)
+
+
+def convolve_window(field, transfer, *, input_offset=(0, 0), output_shape=None, output_offset=(0, 0),
+                    grouped_batch=0):
+    """Embed/FFT/multiply/IFFT/window with an explicit FFT canvas (ASM FFI ABI 4).
+
+    ``transfer[..., ch, cw]`` defines the canvas and is given in natural FFT
+    order. ``field[..., h, w]`` is zero-embedded at ``input_offset`` and the
+    ``output_shape`` window at ``output_offset`` is returned (default: the field
+    shape at the origin). ``ch, cw == h, w`` with zero offsets is a periodic
+    convolution; ``(2h, 2w)`` with offsets ``(h//2, w//2)`` reproduces
+    :func:`convolve`. Leading axes broadcast; field and transfer gradients,
+    JVPs and vmap are supported. Canvas axes must factor into VkFFT radices with
+    at most two uploads per axis (no Bluestein).
+    """
+    field, transfer = jnp.asarray(field), jnp.asarray(transfer)
+    _check_field(field)
+    if transfer.ndim < 2 or transfer.dtype != field.dtype:
+        raise ValueError('transfer must be complex64 with at least two spatial dimensions')
+    geometry = _window_geometry(field.shape[-2:], transfer.shape[-2:], input_offset, output_shape, output_offset)
+    if _register()._abi < 4:
+        raise RuntimeError('convolve_window requires ASM FFI ABI 4; rebuild examples/asm_ffi_build.py')
+    options = _options((1., 1.), 'none', grouped_batch)
+    function = partial(_window_p.bind, transpose=False, grouped=options['grouped'], **geometry)
     return _map_broadcast(function, (field, transfer), (2, 2))
 
 

@@ -38,7 +38,12 @@ struct ASMPlan {
     VkFFTApplication app{};
     CUdevice device{};
     CUstream stream{};
+    // Input field height x width is zero-embedded at (in_y, in_x) in a
+    // canvas_h x canvas_w FFT canvas; the output is the out_h x out_w window at
+    // (out_y, out_x). The classic ASM geometry is a 2x canvas, centred input and
+    // centred same-size output; a canvas equal to the field is periodic.
     uint64_t height, width, bytes;
+    uint64_t canvas_h, canvas_w, in_y, in_x, out_h, out_w, out_y, out_x;
     double dy, dx;
     bool dynamic, bandlimit, prune;
     void* buffer = reinterpret_cast<void*>(1);
@@ -57,15 +62,26 @@ static thread_local ASMPlan* executing = nullptr;
 static thread_local ASMArgs arguments{};
 static thread_local std::string last_error;
 
+static uint64_t asm_pruned_rows(const ASMPlan& plan, bool inverse) {
+    return inverse ? plan.out_h : plan.height;
+}
+static uint64_t asm_pruned_first_row(const ASMPlan& plan, bool inverse) {
+    return inverse ? plan.out_y : plan.in_y;
+}
 static uint64_t asm_pruned_rows_per_group(const ASMPlan& plan, const VkFFTSpecializationConstantsLayout& sc) {
     if (!plan.prune || sc.axis_id != 0 || sc.swapComputeWorkGroupID || sc.mergeSequencesR2C)
         return 0;
+    // Forward row transforms only see input rows; inverse row transforms only
+    // produce output-window rows. All other canvas rows are skipped.
+    bool inverse = sc.actualInverse;
+    uint64_t rows = asm_pruned_rows(plan, inverse), first = asm_pruned_first_row(plan, inverse);
+    if (rows >= plan.canvas_h) return 0;
     if (sc.numAxisUploads == 2) return 1;
     if (sc.numAxisUploads != 1) return 0;
     uint64_t batch = sc.localSize[sc.stridedSharedLayout ? 0 : 1].data.i;
     // Only trim complete independent row batches. Partial groups retain the
     // full dispatch and the existing boundary masks.
-    return batch && plan.height % batch == 0 && (plan.height/2) % batch == 0 ? batch : 0;
+    return batch && rows % batch == 0 && first % batch == 0 ? batch : 0;
 }
 
 static bool asm_is_output(void* opaque) {
@@ -120,7 +136,7 @@ static void asm_dispatch_dimensions(void* axis_ptr, void* dimensions) {
     auto& sc = axis->specializationConstants;
     if (executing) {
         uint64_t batch = asm_pruned_rows_per_group(*executing, sc);
-        if (batch) static_cast<pfUINT*>(dimensions)[1] = executing->height/batch;
+        if (batch) static_cast<pfUINT*>(dimensions)[1] = asm_pruned_rows(*executing, sc.actualInverse)/batch;
     }
 }
 
@@ -128,6 +144,10 @@ static std::string device_helpers(const ASMPlan& plan) {
     std::ostringstream s;
     s << std::setprecision(17);
     s << "#define ASM_H " << plan.height << "ull\n#define ASM_W " << plan.width << "ull\n";
+    s << "#define ASM_CH " << plan.canvas_h << "ull\n#define ASM_CW " << plan.canvas_w << "ull\n";
+    s << "#define ASM_IY " << plan.in_y << "ull\n#define ASM_IX " << plan.in_x << "ull\n";
+    s << "#define ASM_OH " << plan.out_h << "ull\n#define ASM_OW " << plan.out_w << "ull\n";
+    s << "#define ASM_OY " << plan.out_y << "ull\n#define ASM_OX " << plan.out_x << "ull\n";
     s << "#define ASM_DY " << plan.dy << "\n#define ASM_DX " << plan.dx << "\n";
     s << "#define ASM_BANDLIMIT " << plan.bandlimit << "\n";
 #ifdef VKFFT_ASM_FFI
@@ -145,36 +165,38 @@ struct ASMArgs {
     int parameter_dtype, transfer_mode, dz_order, dw_order, transpose;
 #endif
 };
+// Rows not produced by a pruned forward row pass are exact zeros.
 __device__ __forceinline__ float2 asm_load_column(const float2* source, unsigned long long i) {
-    unsigned long long y = i/(2*ASM_W);
-    return (y >= ASM_H/2 && y < ASM_H/2 + ASM_H) ? __ldg(source+i) : make_float2(0.f,0.f);
+    unsigned long long y = i/ASM_CW;
+    return (y >= ASM_IY && y < ASM_IY + ASM_H) ? __ldg(source+i) : make_float2(0.f,0.f);
 }
+// Only rows needed by the pruned inverse row pass are stored.
 __device__ __forceinline__ void asm_store_column(float2* dest, unsigned long long i, float2 v) {
-    unsigned long long y = i/(2*ASM_W);
-    if(y >= ASM_H/2 && y < ASM_H/2 + ASM_H) dest[i]=v;
+    unsigned long long y = i/ASM_CW;
+    if(y >= ASM_OY && y < ASM_OY + ASM_OH) dest[i]=v;
 }
 __device__ __forceinline__ float2 asm_load_input(ASMArgs a, unsigned long long i) {
-    unsigned long long y = i / (2 * ASM_W), x = i % (2 * ASM_W);
-    if (y < ASM_H/2 || y >= ASM_H/2 + ASM_H || x < ASM_W/2 || x >= ASM_W/2 + ASM_W)
+    unsigned long long y = i / ASM_CW, x = i % ASM_CW;
+    if (y < ASM_IY || y >= ASM_IY + ASM_H || x < ASM_IX || x >= ASM_IX + ASM_W)
         return make_float2(0.f, 0.f);
-    return ((const float2*)a.input)[(y-ASM_H/2)*ASM_W + x-ASM_W/2];
+    return ((const float2*)a.input)[(y-ASM_IY)*ASM_W + x-ASM_IX];
 }
 __device__ __forceinline__ void asm_store_output(ASMArgs a, unsigned long long i, float2 v) {
-    unsigned long long y = i / (2 * ASM_W), x = i % (2 * ASM_W);
-    if (y >= ASM_H/2 && y < ASM_H/2 + ASM_H && x >= ASM_W/2 && x < ASM_W/2 + ASM_W)
-        ((float2*)a.output)[(y-ASM_H/2)*ASM_W + x-ASM_W/2] = v;
+    unsigned long long y = i / ASM_CW, x = i % ASM_CW;
+    if (y >= ASM_OY && y < ASM_OY + ASM_OH && x >= ASM_OX && x < ASM_OX + ASM_OW)
+        ((float2*)a.output)[(y-ASM_OY)*ASM_OW + x-ASM_OX] = v;
 }
 __device__ __forceinline__ float2 asm_transfer(ASMArgs a, unsigned long long i) {
-    unsigned long long py = i / (2*ASM_W), px = i % (2*ASM_W);
+    unsigned long long py = i / ASM_CW, px = i % ASM_CW;
     long long y = (py % a.ay)*a.by + py/a.ay;
     long long x = (px % a.ax)*a.bx + px/a.ax;
-    double fy = (y < ASM_H ? y : y - (long long)(2*ASM_H)) / (2.*ASM_H*ASM_DY);
-    double fx = (x < ASM_W ? x : x - (long long)(2*ASM_W)) / (2.*ASM_W*ASM_DX);
+    double fy = (2*y < (long long)ASM_CH ? y : y - (long long)ASM_CH) / (double(ASM_CH)*ASM_DY);
+    double fx = (2*x < (long long)ASM_CW ? x : x - (long long)ASM_CW) / (double(ASM_CW)*ASM_DX);
     double invlambda = 1. / a.wavelength;
     double q = invlambda*invlambda - (fx*fx + fy*fy);
     if (q < 0.) return make_float2(0.f, 0.f);
     if (ASM_BANDLIMIT) {
-        double tx = a.z/(ASM_W*ASM_DX), ty = a.z/(ASM_H*ASM_DY);
+        double tx = 2.*a.z/(ASM_CW*ASM_DX), ty = 2.*a.z/(ASM_CH*ASM_DY);
         if (fabs(fx) > invlambda/sqrt(1.+tx*tx) || fabs(fy) > invlambda/sqrt(1.+ty*ty))
             return make_float2(0.f, 0.f);
     }
@@ -204,7 +226,8 @@ static bool asm_compile_hook(void* app_ptr, void* axis_ptr) {
             if (sc.swapComputeWorkGroupID || at == std::string::npos ||
                     code.find(original, at+original.size()) != std::string::npos)
                 throw std::runtime_error("Unsupported row-pruning workgroup mapping");
-            code.replace(at, original.size(), "shiftY = blockIdx.y + " + std::to_string(building->height/2/row_batch) + ";");
+            code.replace(at, original.size(), "shiftY = blockIdx.y + " +
+                         std::to_string(asm_pruned_first_row(*building, sc.actualInverse)/row_batch) + ";");
         }
         const std::string signature = "VkFFT_main (";
         size_t start = code.find(signature);
@@ -218,7 +241,7 @@ static bool asm_compile_hook(void* app_ptr, void* axis_ptr) {
         if (building->dynamic && sc.convolutionStep) {
             auto* fp = sc.actualInverse ? building->app.localFFTPlan_inverse : building->app.localFFTPlan;
             if (!fp) throw std::runtime_error("Missing FFT plan at coefficient compilation");
-            const uint64_t lengths[] = {2*building->width, 2*building->height};
+            const uint64_t lengths[] = {building->canvas_w, building->canvas_h};
             for (int axis_id = 0; axis_id < 2; ++axis_id) {
                 uint64_t a = fp->numAxisUploads[axis_id] == 2 ? fp->axisSplit[axis_id][0] : lengths[axis_id];
                 uint64_t b = fp->numAxisUploads[axis_id] == 2 ? fp->axisSplit[axis_id][1] : 1;
@@ -259,19 +282,28 @@ static bool asm_compile_hook(void* app_ptr, void* axis_ptr) {
 extern "C" {
 uint32_t asm_abi_version() { return 2; }
 const char* asm_last_error() { return last_error.c_str(); }
-void* asm_create(uint64_t height, uint64_t width, double dy, double dx, int dynamic,
-                 int bandlimit, int prune, uint64_t stream, int threads, int coalesced, int grouped_x, int grouped_y) {
+void* asm_create_geometry(uint64_t height, uint64_t width, uint64_t canvas_h, uint64_t canvas_w,
+                          uint64_t in_y, uint64_t in_x, uint64_t out_h, uint64_t out_w,
+                          uint64_t out_y, uint64_t out_x, double dy, double dx, int dynamic,
+                          int bandlimit, int prune, uint64_t stream, int threads, int coalesced,
+                          int grouped_x, int grouped_y) {
     last_error.clear();
     try {
-        if (!height || !width || height > UINT64_MAX/width/32 || !(dy > 0) || !(dx > 0))
+        if (!height || !width || !out_h || !out_w || !canvas_h || !canvas_w ||
+                canvas_h > UINT64_MAX/canvas_w/8 || !(dy > 0) || !(dx > 0))
             throw std::invalid_argument("Invalid dimensions or pixel pitch");
+        if (in_y > canvas_h || height > canvas_h-in_y || in_x > canvas_w || width > canvas_w-in_x ||
+                out_y > canvas_h || out_h > canvas_h-out_y || out_x > canvas_w || out_w > canvas_w-out_x)
+            throw std::invalid_argument("Input and output windows must lie inside the FFT canvas");
         std::unique_ptr<ASMPlan> p(new ASMPlan);
-        p->height=height; p->width=width; p->bytes=height*width*32;
+        p->height=height; p->width=width; p->bytes=canvas_h*canvas_w*8;
+        p->canvas_h=canvas_h; p->canvas_w=canvas_w; p->in_y=in_y; p->in_x=in_x;
+        p->out_h=out_h; p->out_w=out_w; p->out_y=out_y; p->out_x=out_x;
         p->dy=dy; p->dx=dx; p->dynamic=dynamic; p->bandlimit=bandlimit; p->prune=prune;
         p->stream=reinterpret_cast<CUstream>(stream);
         if (cuCtxGetDevice(&p->device) != CUDA_SUCCESS) throw std::runtime_error("No current CUDA context");
         VkFFTConfiguration c{};
-        c.FFTdim=2; c.size[0]=2*width; c.size[1]=2*height;
+        c.FFTdim=2; c.size[0]=canvas_w; c.size[1]=canvas_h;
         c.device=&p->device; c.stream=&p->stream; c.num_streams=1;
         c.buffer=&p->buffer; c.bufferSize=&p->bytes;
 #ifdef VKFFT_ASM_FFI
@@ -298,9 +330,14 @@ void* asm_create(uint64_t height, uint64_t width, double dy, double dx, int dyna
             if(i) info << ',';
             info << '[' << fp->axisSplit[i][0] << ',' << fp->axisSplit[i][1] << ']';
         }
-        info << "],\"workspace_bytes\":" << p->bytes << ",\"temporary_bytes\":"
+        info << "],\"canvas\":[" << canvas_h << ',' << canvas_w << "],\"input_window\":[" << in_y << ','
+             << in_x << ',' << height << ',' << width << "],\"output_window\":[" << out_y << ',' << out_x
+             << ',' << out_h << ',' << out_w << ']';
+        info << ",\"workspace_bytes\":" << p->bytes << ",\"temporary_bytes\":"
              << (p->app.configuration.allocateTempBuffer ? p->app.configuration.tempBufferSize[0] : 0)
-             << ",\"pruned_row_stages\":" << (asm_pruned_rows_per_group(*p, fp->axes[0][0].specializationConstants) ? 2*fp->numAxisUploads[0] : 0)
+             << ",\"pruned_row_stages\":" << (asm_pruned_rows_per_group(*p, fp->axes[0][0].specializationConstants) ? fp->numAxisUploads[0] : 0)
+                + (p->app.localFFTPlan_inverse && asm_pruned_rows_per_group(*p, p->app.localFFTPlan_inverse->axes[0][0].specializationConstants)
+                   ? p->app.localFFTPlan_inverse->numAxisUploads[0] : 0)
              << ",\"vkfft_version\":" << VkFFTGetVersion() << ",\"kernels\":[";
         bool first = true;
         for (const auto& source : p->sources) {
@@ -328,6 +365,17 @@ void* asm_create(uint64_t height, uint64_t width, double dy, double dx, int dyna
         return p.release();
     } catch(const std::exception& e) { building=nullptr; last_error=e.what(); return nullptr; }
 }
+void* asm_create(uint64_t height, uint64_t width, double dy, double dx, int dynamic,
+                 int bandlimit, int prune, uint64_t stream, int threads, int coalesced, int grouped_x, int grouped_y) {
+    if (!height || !width || height > UINT64_MAX/width/32) {
+        last_error = "Invalid dimensions or pixel pitch";
+        return nullptr;
+    }
+    // Classic ASM: twice-padded canvas, centred input and centred output.
+    return asm_create_geometry(height, width, 2*height, 2*width, height/2, width/2,
+                               height, width, height/2, width/2, dy, dx, dynamic, bandlimit,
+                               prune, stream, threads, coalesced, grouped_x, grouped_y);
+}
 const char* asm_info(void* handle) { return static_cast<ASMPlan*>(handle)->info.c_str(); }
 int asm_execute(void* handle, void* input, void* output, void* workspace, void* transfer,
                 double z, double wavelength) {
@@ -335,9 +383,9 @@ int asm_execute(void* handle, void* input, void* output, void* workspace, void* 
     if (!p || !input || !output || !workspace || (!p->dynamic && !transfer)) return -1;
     auto* fp=p->app.localFFTPlan;
     arguments={input, output, z, wavelength, 1, 1, 1, 1};
-    arguments.ax=fp->numAxisUploads[0]==2 ? fp->axisSplit[0][0] : 2*p->width;
+    arguments.ax=fp->numAxisUploads[0]==2 ? fp->axisSplit[0][0] : p->canvas_w;
     arguments.bx=fp->numAxisUploads[0]==2 ? fp->axisSplit[0][1] : 1;
-    arguments.ay=fp->numAxisUploads[1]==2 ? fp->axisSplit[1][0] : 2*p->height;
+    arguments.ay=fp->numAxisUploads[1]==2 ? fp->axisSplit[1][0] : p->canvas_h;
     arguments.by=fp->numAxisUploads[1]==2 ? fp->axisSplit[1][1] : 1;
     void* kernel=transfer ? transfer : workspace;
     VkFFTLaunchParams launch{};

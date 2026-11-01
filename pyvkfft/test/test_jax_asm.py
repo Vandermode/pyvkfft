@@ -23,6 +23,25 @@ def reference(field, transfer):
     return result[..., h//2:h//2+h, w//2:w//2+w]
 
 
+def window_reference(field, transfer, input_offset=(0, 0), output_shape=None, output_offset=(0, 0)):
+    (ch, cw), (h, w) = transfer.shape[-2:], field.shape[-2:]
+    (iy, ix), (oy, ox) = input_offset, output_offset
+    oh, ow = (h, w) if output_shape is None else output_shape
+    padded = jnp.pad(field, [(0, 0)]*(field.ndim-2) + [(iy, ch-iy-h), (ix, cw-ix-w)])
+    result = jnp.fft.ifft2(jnp.fft.fft2(padded)*transfer)
+    return result[..., oy:oy+oh, ox:ox+ow]
+
+
+# (field shape, canvas, input offset, output shape, output offset)
+WINDOW_GEOMETRIES = (
+    ((12, 20), (12, 20), (0, 0), (12, 20), (0, 0)),     # periodic
+    ((12, 20), (36, 60), (12, 20), (5, 7), (14, 25)),   # 3x canvas, offset sub-window
+    ((15, 25), (15, 25), (0, 0), (15, 25), (0, 0)),     # odd periodic canvas
+    ((10, 14), (30, 42), (3, 25), (10, 14), (3, 25)),   # asymmetric placement
+    ((16, 24), (24, 30), (8, 6), (20, 11), (2, 13)),    # output larger than input in y
+)
+
+
 def analytic_reference(field, z, wavelength, *, pitch, bandlimit='none'):
     h, w = field.shape
     fy = jnp.fft.fftfreq(2*h, pitch[0])[:, None]
@@ -153,7 +172,7 @@ class TestJAXASM(unittest.TestCase):
             self.close(actual[1], ref[1])
             np.testing.assert_allclose(actual[0], ref[0], rtol=2e-5, atol=.005)
             ir = str(function.lower(x, bits).compiler_ir())
-            self.assertIn('@pyvkfft_asm_v3', ir)
+            self.assertIn('@' + self.engine._register()._target, ir)
             self.assertIn('ui32', ir)
             self.assertNotIn('stablehlo.fft', ir)
             self.assertNotIn('stablehlo.shift_right', ir)
@@ -330,7 +349,7 @@ class TestJAXASM(unittest.TestCase):
         x, h = self.field((12, 20)), self.field((24, 40), 23)
         compiled = jax.jit(jax.value_and_grad(lambda x, h: jnp.sum(jnp.abs(self.engine.convolve(x, h))**2)))
         text = str(compiled.lower(x, h).compiler_ir())
-        self.assertIn('@pyvkfft_asm_v3', text)
+        self.assertIn('@' + self.engine._register()._target, text)
         self.assertNotIn('stablehlo.fft', text)
         self.assertNotIn('stablehlo.pad', text)
 
@@ -366,6 +385,90 @@ class TestJAXASM(unittest.TestCase):
         from pyvkfft.asm import _load_native
         with self.assertRaisesRegex(RuntimeError, 'JAX FFI backend'):
             _load_native(os.environ['PYVKFFT_ASM_FFI_LIBRARY'])
+
+
+    def window(self, x, h, geometry, function=None):
+        _, _, input_offset, output_shape, output_offset = geometry
+        return (function or self.engine.convolve_window)(x, h, input_offset=input_offset, output_shape=output_shape,
+                                                         output_offset=output_offset)
+
+    def test_window_geometries_forward_and_classic_identity(self):
+        if self.engine._register()._abi < 4:
+            self.skipTest('ASM FFI ABI 4 required')
+        for i, geometry in enumerate(WINDOW_GEOMETRIES):
+            with self.subTest(geometry=geometry):
+                shape, canvas = geometry[:2]
+                x, h = self.field(shape, 3+i), self.field(canvas, 30+i)
+                self.close(jax.jit(lambda a, b: self.window(a, b, geometry))(x, h),
+                           self.window(x, h, geometry, window_reference))
+                info = [p for p in self.engine.cache_info() if p['canvas'] == list(canvas)]
+                self.assertTrue(info, self.engine.cache_info())
+        x, h = self.field((12, 20)), self.field((24, 40), 5)
+        classic = self.engine.convolve_window(x, h, input_offset=(6, 10), output_offset=(6, 10))
+        np.testing.assert_array_equal(np.asarray(classic), np.asarray(self.engine.convolve(x, h)))
+
+    def test_window_gradients_jvp_broadcast_and_vmap(self):
+        if self.engine._register()._abi < 4:
+            self.skipTest('ASM FFI ABI 4 required')
+        for i, geometry in enumerate(WINDOW_GEOMETRIES):
+            with self.subTest(geometry=geometry):
+                shape, canvas, _, output_shape, _ = geometry
+                x, h = self.field(shape, 41+i), self.field(canvas, 51+i)
+                probe = self.field(output_shape, 61+i)
+                gradients = []
+                for f in (None, window_reference):
+                    loss = lambda a, b, f=f: jnp.real(jnp.sum(self.window(a, b, geometry, f)*probe))
+                    gradients.append(jax.jit(jax.grad(loss, argnums=(0, 1)))(x, h))
+                self.close(gradients[0][0], gradients[1][0])
+                self.close(gradients[0][1], gradients[1][1])
+                dx, dh = self.field(shape, 71+i), self.field(canvas, 81+i)
+                tangents = [jax.jvp(lambda a, b, f=f: self.window(a, b, geometry, f), (x, h), (dx, dh))[1]
+                            for f in (None, window_reference)]
+                self.close(*tangents)
+        geometry = WINDOW_GEOMETRIES[1]
+        x = self.field((3,) + geometry[0], 91)
+        for h in (self.field((1,) + geometry[1], 92), self.field((3,) + geometry[1], 93)):
+            self.close(self.window(x, h, geometry), self.window(x, h, geometry, window_reference))
+        h = self.field(geometry[1], 94)
+        mapped = jax.vmap(lambda a: self.window(a, h, geometry))(x)
+        self.close(mapped, self.window(x, h, geometry, window_reference))
+
+    def test_window_multi_upload_axes_and_native_ir(self):
+        if self.engine._register()._abi < 4:
+            self.skipTest('ASM FFI ABI 4 required')
+        for shape, canvas, offset, out_shape, out_offset in (((24, 18000), (24, 18000), (0, 0), (24, 18000), (0, 0)),
+                                                             ((24, 18000), (72, 54000), (24, 18000), (24, 640), (24, 26000))):
+            geometry = (shape, canvas, offset, out_shape, out_offset)
+            with self.subTest(canvas=canvas):
+                x, h = self.field(shape, 101), self.field(canvas, 102)
+                probe = self.field(out_shape, 103)
+                compiled = jax.jit(jax.value_and_grad(lambda a: jnp.real(jnp.sum(self.window(a, h, geometry)*probe))))
+                value, gradient = compiled(x)
+                ref_value, ref_gradient = jax.jit(jax.value_and_grad(
+                    lambda a: jnp.real(jnp.sum(self.window(a, h, geometry, window_reference)*probe))))(x)
+                self.close(gradient, ref_gradient)
+                np.testing.assert_allclose(value, ref_value, rtol=2e-5, atol=.05)
+                ir = str(compiled.lower(x).compiler_ir())
+                self.assertIn('@' + self.engine._register()._target, ir)
+                self.assertNotIn('stablehlo.fft', ir)
+                if canvas[1] > 36000:  # an 18000-point periodic axis fits in one upload
+                    info = [p for p in self.engine.cache_info() if p['canvas'] == list(canvas)]
+                    self.assertTrue(any(max(p['plan']['uploads']) == 2 for p in info), info)
+
+    def test_window_validation(self):
+        if self.engine._register()._abi < 4:
+            self.skipTest('ASM FFI ABI 4 required')
+        x, h = self.field((12, 20)), self.field((36, 60))
+        with self.assertRaises(ValueError):
+            self.engine.convolve_window(x, h, input_offset=(30, 0))
+        with self.assertRaises(ValueError):
+            self.engine.convolve_window(x, h, output_shape=(10, 10), output_offset=(30, 55))
+        with self.assertRaises(ValueError):
+            self.engine.convolve_window(x, h, input_offset=(-1, 0))
+        with self.assertRaises(TypeError):
+            self.engine.convolve_window(x.astype(jnp.complex128), h)
+        with self.assertRaises(ValueError):
+            self.engine.convolve_window(x, h.astype(jnp.complex128))
 
 
 if __name__ == '__main__':

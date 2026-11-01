@@ -20,6 +20,8 @@ def build(output, cuda):
     if headers.exists():
         raise ValueError('Use a fresh build directory')
     shutil.copytree(root / 'src/VkFFT/vkFFT', headers)
+    for path in (headers, *headers.rglob('*')):  # the checkout may be a read-only snapshot
+        path.chmod(path.stat().st_mode | 0o200)
     changes = []
 
     def edit(relative, old, new):
